@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the desk windows (one per monitor, M7)",
+  "windows": [
+    "main",
+    "desk-*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-outer-position",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-current-monitor",
+    "core:window:allow-available-monitors",
+    "opener:default",
+    "notification:default",
+    "autostart:default",
+    "dialog:default"
+  ]
+}

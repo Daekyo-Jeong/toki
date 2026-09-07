@@ -1,0 +1,43 @@
+/**
+ * Galmuri (갈무리) — bundled offline (V4-8). Only the weights Toki uses:
+ * Galmuri11 (400/700), Galmuri9, GalmuriMono11, GalmuriMono9. woff2 only.
+ *
+ * Copyright (c) 2019–2025 Lee Minseo (quiple@quiple.dev),
+ * with Reserved Font Name "Galmuri". SIL Open Font License 1.1.
+ * https://scripts.sil.org/OFL
+ */
+@font-face {
+  font-family: Galmuri11;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('Galmuri11 Regular'), url('./Galmuri11.woff2') format('woff2');
+}
+@font-face {
+  font-family: Galmuri11;
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local('Galmuri11 Bold'), url('./Galmuri11-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: Galmuri9;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('Galmuri9 Regular'), url('./Galmuri9.woff2') format('woff2');
+}
+@font-face {
+  font-family: GalmuriMono11;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('GalmuriMono11 Regular'), url('./GalmuriMono11.woff2') format('woff2');
+}
+@font-face {
+  font-family: GalmuriMono9;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('GalmuriMono9 Regular'), url('./GalmuriMono9.woff2') format('woff2');
+}

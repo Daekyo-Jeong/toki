@@ -1,0 +1,14 @@
+[package]
+name = "toki-core"
+version = "0.1.0"
+edition = "2021"
+description = "Toki — headless game engine. Pure functions only, no IO/UI deps."
+
+[dependencies]
+# ⚠️ ALLOWED DEPS ONLY:
+#   serde, chrono, anyhow.
+# Do NOT add tauri / tokio / rusqlite / notify / dirs etc.
+# This crate must compile as a pure library and be portable to Python (CardputerZero).
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"

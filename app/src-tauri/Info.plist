@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Tauri가 번들의 Info.plist에 병합한다.
+
+    LSUIElement=true — 트레이 전용 앱이라 독·Cmd-Tab에 안 뜬다.
+    lib.rs가 런타임에 ActivationPolicy::Accessory를 걸긴 하지만 그것만으론
+    약하다: 프로세스를 누가 activate하면(예: 이미 떠 있는 앱에 `open`) 독으로
+    승격된다. 2026-09-02 실제로 겪었다 — 터미널에서 띄운 인스턴스를 `open`으로
+    건드리자 독 아이콘이 생겼다. 번들 수준에서 박아두면 경로와 무관하다.
+  -->
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>

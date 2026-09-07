@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Toki",
+  "version": "1.0.0",
+  "identifier": "me.dkdk.toki",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Toki",
+        "width": 328,
+        "height": 340,
+        "resizable": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "shadow": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "코딩 에이전트와 함께 자라는 다마고치",
+    "longDescription": "Claude Code·Codex CLI 사용 기록을 읽어 펫이 자라는 데스크톱 다마고치. 메모 데스크와 코칭이 함께 있고, 데이터는 전부 이 컴퓨터에만 남는다.",
+    "copyright": "© 2026 tokisoft",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "Developer ID Application: Daekyo Jeong (V6347DY5X7)"
+    }
+  }
+}

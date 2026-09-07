@@ -1,0 +1,354 @@
+/* ─────────────────────────────────────────────────────────────
+   Toki · RPG v3 — Light + 8-bit pixel
+   3-color philosophy: bg / fg / accent (mids = name+opacity).
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* Core 3 colors */
+  --bg:         #fafafa;
+  --fg:         #111111;
+  --accent:     #00c37a;   /* v3: phosphor green — 다마고치 케이싱 (확정, 교체 쉬움) */
+
+  /* Light derivatives */
+  --bg-elev:    #e8e8e8;
+  --bg-deep:    #f0f0f0;
+  --muted:      #6d6d6d;
+  --line:       #111111;
+  --soft:       #ececec;
+  --accent-ink: #00b370;
+
+  /* ── v4 Cassette Futurism (design-brief.md) ──
+     플라스틱 케이스 — 바랜 베이지 */
+  --case:       #cabb9e;
+  --case-hi:    #e0d3b8;
+  --case-lo:    #a3937a;
+  --case-line:  #857761;
+  --case-ink:   #6b5f4c;
+  /* CRT 화면 — 다크 + 크림 포스포 */
+  --scr:        #16161e;
+  --scr2:       #1e1e29;
+  --phos:       #e9ead0;
+  --phos-dim:   rgba(233,234,208,0.52);
+  --phos-30:    rgba(233,234,208,0.30);
+  --phos-14:    rgba(233,234,208,0.14);
+  /* 카세트 액센트 */
+  --amber:      #e0872f;
+  --rust:       #c0563c;
+  --teal:       #3f8f83;
+  /* 데스크 배경 (셸 주변) */
+  --desk:       #b9ae97;
+
+  /* (구 v3 LCD — 사용 안 함, 잔존) */
+  --lcd:        #cbe8d7;
+  --ink:        #112317;
+
+  /* Type — Galmuri 픽셀 폰트. GalmuriMono = 시계/타이머 고정폭. */
+  --pixel:      "Galmuri11", "Galmuri9", "Apple SD Gothic Neo", "Malgun Gothic", monospace;
+  --pixel-mono: "GalmuriMono11", "GalmuriMono9", "GalmuriMono", ui-monospace, monospace;
+  /* 작은 글자 전용 스택. ⚠️ 폰트 이름의 숫자는 글리프 높이지 렌더 크기가
+     아니다 — 실측(unitsPerEm/좌표 GCD): Galmuri11·Mono11 = **12px 정수배**,
+     Galmuri9·Mono9 = **10px 정수배**에서만 픽셀 퍼펙트. 11px·9px로 쓰면
+     12행 중 1행이 통째로 누락돼 1x에서 "픽셀이 모자란" 깨짐이 난다. */
+  --pixel-9:      "Galmuri9", "Galmuri11", "Apple SD Gothic Neo", "Malgun Gothic", monospace;
+  --pixel-mono-9: "GalmuriMono9", "GalmuriMono11", "GalmuriMono", ui-monospace, monospace;
+  --pixelmono:  var(--pixel-mono);
+  --mono:       var(--pixel-mono);
+  --term:       var(--pixel);
+
+  /* Grid */
+  --u:          8px;
+}
+
+* { box-sizing: border-box; }
+html, body, #root {
+  margin: 0; padding: 0;
+  height: 100%;
+  /* v4: transparent window so the rounded cassette shell (and, later, the
+     memo desk) float on the desktop with no visible background. Sub-views
+     render their own opaque Frame bg. */
+  background: transparent;
+  /* Kill the webview overscroll bounce (덜덜거림). */
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* v4: widget, not a document — kill the WebKit image-drag ghost.
+     ⚠️ user-select:none must NOT live here: in WKWebView (native app,
+     unlike Chromium previews) user-select:none on an ancestor blocks
+     caret placement in contenteditable descendants even when the
+     editable re-declares user-select:text — this killed memo-title
+     editing. Selection-blocking is scoped to the non-editable chrome
+     instead (shell wrapper, alert overlay, memo-card controls). */
+  -webkit-user-drag: none;
+  color: var(--fg);
+  font-family: var(--pixel);
+  font-size: 12px;   /* Galmuri11 픽셀 퍼펙트 크기(=12px 정수배) */
+  font-feature-settings: "tnum" 1;
+  -webkit-font-smoothing: none;   /* 픽셀 크리스프 */
+}
+
+/* non-Retina 가독성 (2026-08-10) — Galmuri는 비트맵 픽셀 폰트라 설계 크기
+   정수배(11/22…)에서만 획이 물리 픽셀에 맞는다. 앱은 8~12px를 섞어 쓰는데,
+   2x에선 서브픽셀이 그 소수점 오차를 흡수하지만 1x에선 흡수할 여유가 없어
+   획이 통째로 사라진다. smoothing:none이 그 상황에서 마지막 보정 수단까지
+   없애므로, 1x에서만 안티앨리어싱을 되살린다. (Retina는 기존 크리스프 유지.)
+   근본 해결은 크기 정규화(11px 그리드) — 레이아웃 영향이 있어 별건.
+   감지는 JS(main.tsx)가 <html data-dpi="low">로 찍는다: 멀티 디스플레이에서
+   창이 다른 화면으로 옮겨갈 때 CSS 미디어 쿼리가 재평가 안 붙는 경우가 있어서.
+   아래 미디어 쿼리는 초기 렌더용 보조로 남겨둔다. */
+/* ⚠️ 1x 안티앨리어싱은 폐기(2026-08-10). 크기 정규화 전에는 8~12px 혼용이라
+   AA로 뭉개는 게 그나마 나았지만, 이제 9/11px 설계 크기 + 정수 좌표라 1x에서
+   픽셀이 1:1로 떨어진다 — AA를 켜면 그 완벽한 격자를 도로 흐린다.
+   smoothing:none(위 body 규칙)을 그대로 두는 것이 정답. */
+/* 획이 얇아진 만큼 대비로 벌충 — 반투명 dim 계열이 1x에서 먼저 사라진다.
+   0.52→0.72 / 0.30→0.46 / 0.14→0.22 (완전 불투명까진 안 감: 위계 유지). */
+html[data-dpi="low"] {
+  --phos-dim: rgba(233, 234, 208, 0.72);
+  --phos-30: rgba(233, 234, 208, 0.46);
+  --phos-14: rgba(233, 234, 208, 0.22);
+}
+
+
+/* 비트맵 픽셀 폰트 정렬 원칙 (2026-08-10, 1x 깨짐의 진짜 원인) —
+   em 자간과 소수 배율 line-height는 글자를 반픽셀에 앉힌다(11px×0.04em=0.44px,
+   11px×1.55=17.05px). 2x는 0.5px를 물리 1픽셀로 표현해 버티지만 1x는 표현
+   불가라 획이 통째로 빠진다. 자간·줄높이는 반드시 정수 px로 쓸 것. */
+svg.sprite { shape-rendering: crispEdges; image-rendering: pixelated; -webkit-user-drag: none; }
+
+/* ─── Cassette Futurism soft buttons (v4) — global so any view (shell,
+   alerts, settings, coaching) can use them regardless of mount tree. ─── */
+.cf-soft{all:unset;box-sizing:border-box;flex:1;cursor:pointer;text-align:center;
+  font-family:var(--pixel-9);font-size:10px;line-height:1;color:var(--phos);
+  padding:6px 4px;border:1.5px solid var(--phos);background:transparent;
+  box-shadow:inset -1.5px -1.5px 0 var(--phos-30);transition:background .05s,color .05s;}
+.cf-soft:hover{background:var(--phos-14);}
+.cf-soft.primary{background:var(--phos);color:var(--scr);box-shadow:inset -1.5px -1.5px 0 rgba(0,0,0,.25);}
+/* .primary는 배경을 덮으므로 :hover가 특이도 동률에서 밀려 죽어 있었다
+   (2026-09-03 실측: rest와 hover 계산값이 동일). 주 CTA에도 반응을 준다. */
+.cf-soft.primary:hover{background:var(--phos-dim);}
+.cf-soft:active{background:var(--phos);color:var(--scr);transform:translateY(1px);box-shadow:none;}
+.cf-soft.auto{flex:0 0 auto;padding:5px 12px;}
+.cf-soft:disabled{opacity:0.4;cursor:default;}
+.cf-soft:disabled:hover{background:transparent;}
+.cf-soft.primary:disabled:hover{background:var(--phos);}
+/* `all:unset`이 UA 포커스 링까지 지워, 키보드 사용자가 자기 위치를 볼 수 없었다.
+   CRT 톤에 맞춰 이중 테두리로 표시한다(포스포 아웃라인 + 안쪽 여백). */
+.cf-soft:focus-visible{outline:2px solid var(--phos);outline-offset:2px;}
+
+/* 모션 최소화 선호를 존중한다 — 스프라이트 프레임·깜빡임·팝인을 멈춘다. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;}
+}
+.pxmono{font-family:var(--pixel-mono);font-variant-numeric:tabular-nums;}
+.pxmono9{font-family:var(--pixel-mono-9);font-variant-numeric:tabular-nums;}
+
+/* KR-EN x-height parity hook — applied per-fragment if any locale tag drifts. */
+:lang(ko), .ko { font-feature-settings: "tnum" 1; }
+
+button, input, select, textarea { border-radius: 0; font-family: inherit; }
+
+/* ─── Type utilities ─────────────────────────────────────── */
+.px      { font-family: var(--pixel); }
+.tm      { font-family: var(--term); }
+.mn      { font-family: var(--mono); }
+.tnum    { font-variant-numeric: tabular-nums; }
+.up      { text-transform: uppercase; letter-spacing: 0.06em; }
+.dim     { color: var(--muted); }
+
+/* RPG v3 — brutalist label scale (uppercase, bold, tracked).
+   Names preserve the prior visual hierarchy; the actual px values are
+   the Monaco-proportionate equivalents of the old Press-Start-2P scale. */
+.px-7    { font-family: var(--mono); font-size: 11px; line-height: 1.15; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.px-8    { font-family: var(--mono); font-size: 12px; line-height: 1.15; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.px-10   { font-family: var(--mono); font-size: 13px; line-height: 1.15; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.px-12   { font-family: var(--mono); font-size: 15px; line-height: 1.10; font-weight: 700; letter-spacing: 0.02em; }
+.px-14   { font-family: var(--mono); font-size: 18px; line-height: 1.10; font-weight: 700; letter-spacing: 0.02em; }
+
+/* RPG v3 — body scale (regular weight, comfortable size).
+   .tm-14 carries muted color (callout helper-text). */
+.tm-12   { font-family: var(--mono); font-size: 12px; line-height: 1.35; }
+.tm-14   { font-family: var(--mono); font-size: 12px; line-height: 1.35; color: var(--muted); }
+.tm-16   { font-family: var(--mono); font-size: 13px; line-height: 1.35; }
+.tm-18   { font-family: var(--mono); font-size: 14px; line-height: 1.35; }
+.tm-20   { font-family: var(--mono); font-size: 15px; line-height: 1.30; }
+
+/* Legacy section label kept for back-compat */
+.section-label {
+  font-family: var(--pixel);
+  font-size: 7px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+/* ─── Rules / boxes ──────────────────────────────────────── */
+.hr        { border: 0; border-top: 1px solid var(--line); margin: 0; }
+.hr-dashed { border: 0; border-top: 1px dashed var(--line); margin: 0; }
+
+.box       { border: 1px solid var(--line); background: var(--bg); }
+.box-thick { border: 2px solid var(--line); background: var(--bg); }
+.box-inv   { background: var(--fg); color: var(--bg); }
+.box-acc   { background: var(--accent); color: var(--fg); border: 1px solid var(--line); }
+
+/* ─── Live dot ───────────────────────────────────────────── */
+.live-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  background: var(--accent);
+  border: 1px solid var(--line);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* ─── Buttons (brutalist) ──────────────────────────────────
+   RPG v3: taller padding (10/14), slightly bigger label (12px),
+   tighter tracking (0.06em vs 0.12em). */
+.btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  line-height: 1;
+}
+.btn:hover    { background: var(--fg); color: var(--bg); }
+.btn-acc      { background: var(--accent); color: var(--fg); }
+.btn-acc:hover{ background: var(--accent-ink); color: var(--bg); }
+.btn-inv      { background: var(--fg); color: var(--bg); }
+.btn-inv:hover{ background: var(--bg); color: var(--fg); }
+
+/* ─── Pixel rendering ────────────────────────────────────── */
+img, svg { image-rendering: auto; }
+svg.pixel { shape-rendering: crispEdges; image-rendering: pixelated; }
+::selection { background: var(--accent); color: var(--fg); }
+
+/* ─── LCD textures ───────────────────────────────────────── */
+.lcd-grid {
+  background-image:
+    radial-gradient(rgba(17,17,17,0.06) 1px, transparent 1.2px);
+  background-size: 4px 4px;
+}
+.lcd-line {
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(17,17,17,0.05) 3px 4px);
+}
+
+/* ─── HP / XP bar primitives ─────────────────────────────── */
+.hpbar {
+  position: relative;
+  height: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.hpbar > .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); }
+.hpbar.crit > .fill { background: var(--fg); animation: blink 0.6s steps(2) infinite; }
+
+@keyframes blink { 50% { opacity: 0.2; } }
+
+.xpbar {
+  position: relative;
+  height: 7px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.xpbar > .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--fg); }
+
+/* ─── Stat tiles (RPG v3) ──────────────────────────────────
+   Each tile shows a tiny key + a larger right-aligned value. Numbers
+   are tabular so they don't jitter as they tick up. */
+.stat {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+.stat .k {
+  font-family: var(--mono); font-size: 10px;
+  font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.stat .v {
+  font-family: var(--mono); font-size: 13px;
+  font-weight: 700; margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Stepped pixel-art motion ───────────────────────────── */
+@keyframes breath-step {
+  0%, 49.9%   { transform: translateY(0); }
+  50%, 100%   { transform: translateY(-2px); }
+}
+@keyframes shake-step {
+  0%, 24.9%   { transform: translateX(0); }
+  25%, 49.9%  { transform: translateX(-2px); }
+  50%, 74.9%  { transform: translateX(0); }
+  75%, 100%   { transform: translateX(2px); }
+}
+@keyframes sway-step {
+  0%, 49.9%   { transform: translateX(0); }
+  50%, 100%   { transform: translateX(-2px); }
+}
+
+@keyframes evolveFlash {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+/* MVP-S BG scroll is now JS-driven (procedural chunk buffer in components.tsx).
+   See `useRollingChunks` + `ParallaxBG`. The old @keyframes was removed because
+   procgen needs to mutate the seed array, which CSS animations can't do.   */
+
+/* ─── MVP-S — side-scroll mob choreography ───────────────
+   Mob marches in from the right edge to the player position, then a brief
+   hit shake, then fades out. Stepped to keep the pixel feel.            */
+@keyframes mob-march-kf {
+  /* Mob is left-anchored at left:82 (right next to the player). We carry it
+     in from +220px (far off-screen right; `overflow: hidden` on Stage clips
+     the entry), walking left until flush at translateX(0). */
+  0%   { transform: translateX(220px); }
+  100% { transform: translateX(0); }
+}
+@keyframes mob-hit-kf {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-3px); }
+  75%      { transform: translateX(3px); }
+}
+@keyframes mob-fade-kf {
+  0%   { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(8px); }
+}
+.mob-march { animation: mob-march-kf 1.4s steps(8, end) 1; }
+.mob-hit   { animation: mob-hit-kf 0.22s steps(2, end) 2; }
+.mob-fade  { animation: mob-fade-kf 0.4s steps(4, end) 1 forwards; }
+
+/* Player gets a quick invert flash when struck. */
+@keyframes player-hit-kf {
+  0%, 100% { filter: none; }
+  50%      { filter: invert(1); }
+}
+.player-hit { animation: player-hit-kf 0.22s steps(2, end) 1; }
+
+.motion-breath       { animation: breath-step 1.4s steps(1, end) infinite; }
+.motion-breath-slow  { animation: breath-step 3.0s steps(1, end) infinite; }
+.motion-shake        { animation: shake-step  0.32s steps(1, end) infinite; }
+.motion-sway         { animation: sway-step   1.8s steps(1, end) infinite; }
+
+/* ─── Coaching flow motion (V4-9 design-sync) — CRT scan loader +
+   report-popup entrance. Global so the shell's coaching mode has them
+   regardless of where in the tree it mounts. ─── */
+@keyframes tk-scan { 0% { transform: translateY(-100%); } 100% { transform: translateY(400%); } }
+@keyframes tk-bar  { 0% { transform: scaleX(.05); } 100% { transform: scaleX(1); } }
+/* disk-defrag loader — read/write head blink (Toki v4 design) */
+@keyframes tk-defrag-w { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes tk-pop  { 0% { opacity: 0; transform: translateY(6px) scale(.97); } 100% { opacity: 1; transform: none; } }
+/* fill-mode는 backwards — `both`면 끝 프레임의 `transform: none`이 애니메이션
+   종료 후에도 남아 타이틀바 드래그의 인라인 translate를 영구히 덮는다 (2026-09-02).
+   100%가 자연 상태와 같아서 backwards로 바꿔도 보이는 건 동일하다. */
+.tk-report { animation: tk-pop .16s cubic-bezier(.2,.8,.2,1) backwards; }
