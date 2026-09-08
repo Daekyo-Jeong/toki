@@ -1509,28 +1509,34 @@ export function TamagotchiShell({
     return () => { window.clearInterval(id); window.removeEventListener("resize", report); };
   }, [reportClickRects]);
 
+  // 틱은 **숫자만 줄인다.** 그 외의 일은 하지 않는다.
   useEffect(() => {
     if (!pomoRunning) { if (pomoTimer.current) { window.clearInterval(pomoTimer.current); pomoTimer.current = null; } return; }
-    pomoTimer.current = window.setInterval(() => {
-      setPomoLeft((left) => {
-        if (left > 0) return left - 1;
-        // Phase just ended → flip, load the next phase's full duration, and
-        // PAUSE (don't auto-run the next phase — the user starts it when ready).
-        // P3-14: also nudge, since pomodoro used to be silent.
-        setPomoPhase((p) => (p === "FOCUS" ? "BREAK" : "FOCUS"));
-        const focusEnded = pomoPhase === "FOCUS";
-        if (focusEnded) setPomoDone((d) => d + 1);
-        setPomoRunning(false);
-        setAlert("pomo");
-        osNotify("집중", focusEnded ? "집중 끝! 5분 쉬어가요." : "휴식 끝 — 다시 집중?", false);
-        const nextFull = focusEnded ? 5 * 60 : 25 * 60;
-        setPomoTotal(nextFull);
-        return nextFull;
-      });
-    }, 1000);
-    return () => { if (pomoTimer.current) window.clearInterval(pomoTimer.current); };
+    pomoTimer.current = window.setInterval(() => setPomoLeft((left) => (left > 0 ? left - 1 : 0)), 1000);
+    return () => { if (pomoTimer.current) { window.clearInterval(pomoTimer.current); pomoTimer.current = null; } };
+  }, [pomoRunning]);
+
+  // 만료 처리는 **별도 effect**다.
+  //
+  // 예전엔 `setPomoLeft` 의 updater 안에서 `setPomoPhase` 를 불렀다. updater 는
+  // 순수해야 하고 React 는 그걸 두 번 호출할 수 있다 — 실제로 StrictMode 에서
+  // 두 번 돌아 phase 가 FOCUS→BREAK→FOCUS 로 **되돌아갔고**, 집중이 끝났는데
+  // "휴식 끝! 다시 집중해볼까요?" 팝업이 떴다(2026-09-07 실측).
+  //
+  // Phase 는 여기서 넘기고 **일시정지**한다 — 다음 판은 사람이 시작한다.
+  useEffect(() => {
+    if (!pomoRunning || pomoLeft > 0) return;
+    const focusEnded = pomoPhase === "FOCUS";
+    const nextFull = focusEnded ? 5 * 60 : 25 * 60;
+    setPomoRunning(false);
+    setPomoPhase(focusEnded ? "BREAK" : "FOCUS");
+    setPomoTotal(nextFull);
+    setPomoLeft(nextFull);
+    if (focusEnded) setPomoDone((d) => d + 1);
+    setAlert("pomo");
+    osNotify("집중", focusEnded ? "집중 끝! 5분 쉬어가요." : "휴식 끝 — 다시 집중?", false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pomoRunning, pomoPhase]);
+  }, [pomoLeft, pomoRunning, pomoPhase]);
 
   // 상태 표정(idle/hungry/focus)은 `hungryRows`·`focusRows`를 가진 펫만 구분한다.
   // 나머지는 실루엣 변주만 있는 정적 외형(design-brief §8) — 상태 무관하게 그대로.
@@ -1566,6 +1572,17 @@ export function TamagotchiShell({
   const petRows = isFocus && activeVariant.focusRows
     ? baseRows
     : withGaze(baseRows, detectEyes(baseRows), gaze.dx, gaze.dy);
+  // 팝업 스프라이트도 **지금 쓰는 펫**이어야 한다. 예전엔 기본 펫(동글이)
+  // 스프라이트를 하드코딩해서, 깡총이나 Studio 펫을 쓰는 사람에게는 셸 안의
+  // 펫과 팝업 속 펫이 서로 다른 생물이었다(2026-09-07 지적).
+  // 애니메이션 프레임(activeAnim)이 아니라 정지 프레임을 쓴다 — 팝업은 한 컷이다.
+  const alertRows = (k: "idle" | "hungry" | "focus") =>
+    (k === "focus" && activeVariant.focusRows) ||
+    (k === "hungry" && activeVariant.hungryRows) ||
+    activeVariant.rows;
+  // 집중이 끝났으면 쉬는 얼굴(idle), 휴식이 끝났으면 집중 얼굴(focus).
+  const pomoAlertRows = alertRows(pomoPhase === "BREAK" ? "idle" : "focus");
+
   const hhmm = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
   /* ── mode renders ── */
@@ -1659,7 +1676,11 @@ export function TamagotchiShell({
           pomoDirty
             ? { label: "스킵", onClick: skipPhase }
             : { label: "＋", onClick: () => nudge(60) },
-          { label: pomoRunning ? "정지" : "시작", primary: true, onClick: () => setPomoRunning((r) => !r) },
+          // 시작하면 **홈으로 나온다.** 타이머 화면에 남으면 정작 펫이 안 보여서
+          // "펫이 같이 화면을 본다"는 기능이 성립하지 않는다(2026-09-07 실사용 지적).
+          // 정지는 이 화면에 남는다 — 방금 멈춘 값을 보고 조절하려는 것이므로.
+          { label: pomoRunning ? "정지" : "시작", primary: true,
+            onClick: () => { if (!pomoRunning) { setPomoRunning(true); setMode("home"); } else setPomoRunning(false); } },
         ]}
       >
         <div style={{ textAlign: "center" }}>
@@ -2024,7 +2045,7 @@ export function TamagotchiShell({
   if (alert === "hunger") {
     alertNode = (
       <AlertDialog
-        title="경고" sprite={P_HUNGRY} spriteScale={4}
+        title="경고" sprite={alertRows("hungry")} spriteScale={4}
         ok="밥 주기" onOk={() => { setAlert(null); invoke("open_claude").catch(() => {}); }}
         cancel="나중에" onCancel={() => setAlert(null)}
         copyright="©1986 tokisoft"
@@ -2081,11 +2102,21 @@ export function TamagotchiShell({
     // pomoPhase is already the NEW phase (we flipped before the alert), so
     // BREAK ⇒ focus just finished, FOCUS ⇒ break just finished.
     const toBreak = pomoPhase === "BREAK";
+    // 버튼이 실제로 그 일을 한다. 예전엔 "쉬기"도 "닫기"도 그냥 팝업만 닫아서,
+    // 쉬겠다고 눌러도 휴식 타이머가 멈춘 채 남아 있었다(2026-09-07 지적).
+    const startNext = () => { setAlert(null); setPomoRunning(true); setMode("home"); };
+    // 넘기기 = 이 phase를 건너뛰고 다음 phase를 기본 길이로 대기시킨다.
+    // 완주가 아니므로 pomoDone은 올리지 않는다(skipPhase와 같은 규칙).
+    const skipNext = () => {
+      const next = toBreak ? "FOCUS" : "BREAK";
+      const full = next === "FOCUS" ? 25 * 60 : 5 * 60;
+      setAlert(null); setPomoPhase(next); setPomoTotal(full); setPomoLeft(full); setPomoRunning(false);
+    };
     alertNode = (
       <AlertDialog
-        title="집중" sprite={toBreak ? P_IDLE : P_FOCUS} spriteScale={4}
-        ok={toBreak ? "쉬기" : "집중"} onOk={() => setAlert(null)}
-        cancel="닫기" onCancel={() => setAlert(null)}
+        title="집중" sprite={pomoAlertRows} spriteScale={4}
+        ok={toBreak ? "쉬기" : "집중"} onOk={startNext}
+        cancel="넘기기" onCancel={skipNext}
         copyright="©1986 tokisoft"
       >
         {toBreak ? "집중 한 판 끝!\n5분 쉬어가요." : "휴식 끝!\n다시 집중해볼까요?"}
