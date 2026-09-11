@@ -17,8 +17,16 @@ Claude Code나 Codex와 같은 코딩 에이전트로 일하면 그 안의 펫�
 
 터미널 한 줄이면 됩니다.
 
+**macOS** (터미널)
+
 ```sh
 curl -fsSL https://toki.dkdk.me/install.sh | bash
+```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://toki.dkdk.me/install.ps1 | iex
 ```
 
 먼저 읽어보고 실행하고 싶다면:
@@ -28,7 +36,7 @@ curl -fsSL https://toki.dkdk.me/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
-`.dmg`를 직접 받아 드래그해도 됩니다 → [releases](https://github.com/Daekyo-Jeong/toki/releases/latest)
+`.dmg`(macOS)나 `setup.exe`(Windows)를 직접 받아도 됩니다 → [releases](https://github.com/Daekyo-Jeong/toki/releases/latest)
 
 > **왜 터미널을 권하나**: macOS는 브라우저로 받은 파일에 격리 딱지를 붙입니다.
 >
@@ -43,9 +51,10 @@ less install.sh && bash install.sh
 |       |                                                                                                                    |
 | ----- | ------------------------------------------------------------------------------------------------------------------ |
 | macOS | 11 이상 · **Apple Silicon**                                                                                          |
+| Windows | 10 이상 · x64 · 훅·사용량 연동에 [Git for Windows](https://git-scm.com/downloads/win) (Claude Code가 Git Bash로 실행) |
 | 에이전트  | [Claude Code](https://claude.com/claude-code) 또는 [Codex CLI](https://developers.openai.com/codex/cli) — 둘 다 써도 됩니다 |
 
-인텔 맥은 지원하지 않습니다. Windows는 만들고 있습니다.
+인텔 맥은 지원하지 않습니다. Windows 설치 파일은 아직 코드 서명이 없어 SmartScreen 경고가 뜹니다 — "추가 정보 → 실행"으로 넘어가면 됩니다.
 
 
 처음 켜면 어떤 에이전트가 설치 되어 있는지 찾아서 보여주고, 기록을 읽어 그동안 쌓인만큼 레벨을 매깁니다. 
