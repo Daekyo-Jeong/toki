@@ -1276,6 +1276,17 @@ pub fn run() {
             {
                 let h = app.handle().clone();
                 desk::sync_windows(&h);
+                // **첫 실행은 데스크를 바로 띄운다.** 설치 직후 트레이에만 앉아 있으면
+                // 켜졌는지도 모른다(대교 Windows 실기 2차, 2026-09-11). 온보딩을
+                // 끝낸 뒤부터는 지금처럼 조용히 트레이에 상주한다.
+                let first_run = app
+                    .try_state::<Arc<db::Db>>()
+                    .map(|db| !db.onboarded().unwrap_or(true))
+                    .unwrap_or(false);
+                if first_run {
+                    eprintln!("[window] first run — showing desk");
+                    desk::for_each_desk(&h, show_fullscreen_desk);
+                }
                 std::thread::spawn(move || loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     desk::sync_windows(&h);

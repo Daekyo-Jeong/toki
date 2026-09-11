@@ -945,24 +945,37 @@ type DeepPreview = {
   has_inventory: boolean;
 };
 
-const SETTINGS_ROWS: { id: string; label: string }[] = [
+type SettingsRow = { id: string; label: string };
+/** 설정 최상위. `g:` 는 들어가는 그룹 — 전부 펼쳐 두면 스크롤 목록이 되고, 어떤
+ *  게 "상태"고 어떤 게 "설정"인지 안 갈렸다(대교 실기 2차, 2026-09-11). CLI 유무
+ *  같은 **상태**는 정보 화면(에이전트)으로 갔다. */
+const SETTINGS_TOP: SettingsRow[] = [
   { id: "notify", label: "알림" },
   { id: "autostart", label: "로그인 시 자동 실행" },
-  { id: "sinceInstall", label: "설치 이후만 집계" },
-  // 이름은 **사용자가 얻는 것**으로(대교, 2026-09-11 실기: "상태줄"은 뭔지 모른다).
-  { id: "hooks", label: "Claude 기록 연동" },
-  { id: "statusline", label: "Claude 사용량 연동" },
-  { id: "codexHooks", label: "Codex 기록 연동" },
-  { id: "claudeCli", label: "Claude CLI" },
-  { id: "codexCli", label: "Codex CLI" },
-  { id: "casing", label: "케이스 색상" },
-  { id: "invert", label: "화면 반전" },
-  { id: "onTop", label: "최상위 고정" },
-  { id: "coachBackend", label: "코칭 LLM" },
-  { id: "memoryPaste", label: "기억 붙여넣기" },
-  { id: "promptsReset", label: "프롬프트 기본값" },
-  { id: "reset", label: "데이터 초기화" },
+  { id: "g:display", label: "표시" },
+  { id: "g:coach", label: "코칭·회고" },
+  { id: "g:data", label: "데이터" },
 ];
+const SETTINGS_GROUPS: Record<string, { title: string; rows: SettingsRow[] }> = {
+  display: { title: "표시", rows: [
+    { id: "onTop", label: "최상위 고정" },
+    { id: "casing", label: "케이스 색상" },
+    { id: "invert", label: "화면 반전" },
+  ] },
+  coach: { title: "코칭·회고", rows: [
+    { id: "coachBackend", label: "기본 AI" },
+    { id: "memoryPaste", label: "기억 붙여넣기" },
+    { id: "promptsReset", label: "코칭 프롬프트" },
+    // 이름은 **사용자가 얻는 것**으로("상태줄"은 뭔지 모른다 — 대교 실기 1차).
+    { id: "hooks", label: "Claude 기록 연동" },
+    { id: "codexHooks", label: "Codex 기록 연동" },
+    { id: "statusline", label: "사용량 연동" },
+  ] },
+  data: { title: "데이터", rows: [
+    { id: "sinceInstall", label: "설치 이후만 집계" },
+    { id: "reset", label: "데이터 초기화" },
+  ] },
+};
 
 function Pill({ on, fg, bg }: { on: boolean; fg: string; bg: string }) {
   return (
@@ -1051,10 +1064,17 @@ export function TamagotchiShell({
   const [mode, setMode] = useState<Mode>(initialMode);
   const [cursor, setCursor] = useState(0);
   const [now, setNow] = useState(new Date());
-  const [pomoLeft, setPomoLeft] = useState(25 * 60);
+  // 집중 길이는 **마지막에 맞춘 값**을 기억한다(대교 실기 2차, 2026-09-11) —
+  // 매번 25분으로 돌아오면 ＋/－ 를 매번 눌러야 한다. 휴식은 5분 고정.
+  const [pomoFocusFull, setPomoFocusFull] = useState(() => {
+    const v = Number(localStorage.getItem("toki-pomo-focus"));
+    return Number.isFinite(v) && v >= 60 && v <= 90 * 60 ? v : 25 * 60;
+  });
+  const rememberFocus = (sec: number) => { setPomoFocusFull(sec); try { localStorage.setItem("toki-pomo-focus", String(sec)); } catch {} };
+  const [pomoLeft, setPomoLeft] = useState(() => pomoFocusFull);
   // Full duration of the current phase — the denominator for the 10-dot
   // progress meter. Tracks ＋/－ (session length) and resets on each phase flip.
-  const [pomoTotal, setPomoTotal] = useState(25 * 60);
+  const [pomoTotal, setPomoTotal] = useState(() => pomoFocusFull);
   const [pomoRunning, setPomoRunning] = useState(false);
   const [pomoPhase, setPomoPhase] = useState<"FOCUS" | "BREAK">("FOCUS");
   const [pomoDone, setPomoDone] = useState(0);
@@ -1361,8 +1381,9 @@ export function TamagotchiShell({
 
   // V4-9: settings-in-CRT (cursor list, ▲▼변경 — same pattern as MENU).
   const [settingsCursor, setSettingsCursor] = useState(0);
+  const [settingsGroup, setSettingsGroup] = useState<string | null>(null);
+  const [settingsTopCursor, setSettingsTopCursor] = useState(0);
   const [hook, setHook] = useState<HookStatus | null>(null);
-  const [cliCopied, setCliCopied] = useState<string | null>(null);
   const [resetArmed, setResetArmed] = useState(false);
   useEffect(() => {
     if (mode !== "settings") return;
@@ -1391,12 +1412,7 @@ export function TamagotchiShell({
       case "sinceInstall": return { kind: "pill", on: !!settings?.track_since_install };
       // Windows 에 Git for Windows 가 없으면 훅이 아예 못 돈다 — 켜기 전에 말한다.
       case "hooks": return hook?.shell_ok === false ? { kind: "text", text: "Git 필요" } : { kind: "pill", on: !!hook?.installed };
-      case "claudeCli": case "codexCli": {
-        const a = hook?.agents?.find((x) => x.id === (id === "claudeCli" ? "claude" : "codex"));
-        if (!a) return { kind: "text", text: "확인 중" };
-        if (cliCopied === a.id) return { kind: "text", text: "복사됨" };
-        return { kind: "text", text: a.cli ? "✓ 있음" : "설치 명령 복사" };
-      }
+      case "g:display": case "g:coach": case "g:data": return { kind: "text", text: "▸" };
       case "statusline": return { kind: "pill", on: !!hook?.statusline_installed };
       case "codexHooks": return hook?.codex_available
         ? { kind: "pill", on: !!hook.codex_installed }
@@ -1424,15 +1440,10 @@ export function TamagotchiShell({
     } else if (id === "hooks") {
       if (hook?.shell_ok === false) openExternal("https://git-scm.com/downloads/win");
       else toggleHooks(!hook?.installed);
-    } else if (id === "claudeCli" || id === "codexCli") {
-      const a = hook?.agents?.find((x) => x.id === (id === "claudeCli" ? "claude" : "codex"));
-      if (!a) return;
-      if (a.cli) { openExternal(a.install_url); return; }
-      copyToClipboard(a.install_cmd).then((ok) => {
-        if (!ok) return;
-        setCliCopied(a.id);
-        window.setTimeout(() => setCliCopied(null), 2000);
-      });
+    } else if (id.startsWith("g:")) {
+      setSettingsTopCursor(settingsCursor);
+      setSettingsGroup(id.slice(2));
+      setSettingsCursor(0);
     } else if (id === "statusline") {
       runInstaller(hook?.statusline_installed ? "statusline_uninstall" : "statusline_install");
     } else if (id === "codexHooks") {
@@ -1560,7 +1571,7 @@ export function TamagotchiShell({
   useEffect(() => {
     if (!pomoRunning || pomoLeft > 0) return;
     const focusEnded = pomoPhase === "FOCUS";
-    const nextFull = focusEnded ? 5 * 60 : 25 * 60;
+    const nextFull = focusEnded ? 5 * 60 : pomoFocusFull;
     setPomoRunning(false);
     setPomoPhase(focusEnded ? "BREAK" : "FOCUS");
     setPomoTotal(nextFull);
@@ -1571,7 +1582,7 @@ export function TamagotchiShell({
     // 토스트가 안 떠 "팝업만 뜬다"가 됐다(대교 실기, 2026-09-11).
     osNotify("집중", focusEnded ? "집중 끝! 5분 쉬어가요." : "휴식 끝 — 다시 집중?", true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pomoLeft, pomoRunning, pomoPhase]);
+  }, [pomoLeft, pomoRunning, pomoPhase, pomoFocusFull]);
 
   // 상태 표정(idle/hungry/focus)은 `hungryRows`·`focusRows`를 가진 펫만 구분한다.
   // 나머지는 실루엣 변주만 있는 정적 외형(design-brief §8) — 상태 무관하게 그대로.
@@ -1678,6 +1689,7 @@ export function TamagotchiShell({
     const nudge = (delta: number) => setPomoLeft((v) => {
       const nv = Math.max(60, Math.min(90 * 60, v + delta));
       setPomoTotal(nv);
+      if (pomoPhase === "FOCUS") rememberFocus(nv);
       return nv;
     });
     // Reset the CURRENT phase timer to full and pause. Snap to a whole minute
@@ -1692,7 +1704,7 @@ export function TamagotchiShell({
     // 완주라 별도로 +1.) 다음 phase는 기본 길이로.
     const skipPhase = () => {
       const focusEnded = pomoPhase === "FOCUS";
-      const nextFull = focusEnded ? 5 * 60 : 25 * 60;
+      const nextFull = focusEnded ? 5 * 60 : pomoFocusFull;
       setPomoPhase(focusEnded ? "BREAK" : "FOCUS");
       setPomoTotal(nextFull); setPomoLeft(nextFull); setPomoRunning(false);
     };
@@ -2000,6 +2012,13 @@ export function TamagotchiShell({
               {["claude", "codex"].map((a) =>
                 line(a, fmtTok(agentUsage.agents.find((x) => x.label === a)?.tokens ?? 0)),
               )}
+              {/* CLI 유무는 **상태**라 설정이 아니라 여기(대교, 2026-09-11). 없으면
+                  온보딩·설정이 아니라 이 줄이 말하고, 설치 명령은 온보딩 1/4 에 있다. */}
+              <div style={{ borderTop: "1.5px solid var(--phos-30)", paddingTop: 5 }}>
+                {(hook?.agents ?? []).map((a) =>
+                  line(`${a.id} CLI`, a.cli ? "✓" : <span style={{ color: "var(--rust)" }}>없음</span>),
+                )}
+              </div>
               <div style={{ borderTop: "1.5px solid var(--phos-30)", paddingTop: 5 }}>
                 {line(
                   "codex 파싱",
@@ -2029,17 +2048,25 @@ export function TamagotchiShell({
     );
   } else {
     // settings — cursor list (▲▼변경), same interaction pattern as MENU.
+    // 두 단: 최상위(알림·자동 실행·그룹 3개) → 그룹 안. "뒤로"는 한 단씩 나간다.
+    const group = settingsGroup ? SETTINGS_GROUPS[settingsGroup] : null;
+    const SETTINGS_ROWS = group ? group.rows : SETTINGS_TOP;
     const VIS = 5;
-    const start = Math.max(0, Math.min(settingsCursor - 2, SETTINGS_ROWS.length - VIS));
+    const start = Math.max(0, Math.min(settingsCursor - 2, Math.max(0, SETTINGS_ROWS.length - VIS)));
     const shown = SETTINGS_ROWS.slice(start, start + VIS);
+    const back = () => {
+      if (group) { setSettingsGroup(null); setSettingsCursor(settingsTopCursor); }
+      else setMode("home");
+    };
+    const primaryLabel = SETTINGS_ROWS[settingsCursor]?.id.startsWith("g:") ? "열기" : "변경";
     screen = (
       <Screen
-        status={<><span style={{ color: "var(--phos-dim)", letterSpacing: "1px" }}>SETTINGS</span><span className="pxmono9" style={{ color: "var(--phos-dim)" }}>{settingsCursor + 1}/{SETTINGS_ROWS.length}</span></>}
+        status={<><span style={{ color: "var(--phos-dim)", letterSpacing: "1px" }}>{group ? group.title : "SETTINGS"}</span><span className="pxmono9" style={{ color: "var(--phos-dim)" }}>{settingsCursor + 1}/{SETTINGS_ROWS.length}</span></>}
         buttons={[
-          { label: "뒤로", onClick: () => setMode("home") },
+          { label: "뒤로", onClick: back },
           { label: "▲", onClick: () => setSettingsCursor((c) => (c - 1 + SETTINGS_ROWS.length) % SETTINGS_ROWS.length) },
           { label: "▼", onClick: () => setSettingsCursor((c) => (c + 1) % SETTINGS_ROWS.length) },
-          { label: "변경", primary: true, onClick: () => changeSettingsRow(SETTINGS_ROWS[settingsCursor].id) },
+          { label: primaryLabel, primary: true, onClick: () => changeSettingsRow(SETTINGS_ROWS[settingsCursor].id) },
         ]}
       >
         <div style={{ alignSelf: "stretch", display: "flex", flexDirection: "column", gap: 1 }}>
@@ -2144,7 +2171,7 @@ export function TamagotchiShell({
     // 완주가 아니므로 pomoDone은 올리지 않는다(skipPhase와 같은 규칙).
     const skipNext = () => {
       const next = toBreak ? "FOCUS" : "BREAK";
-      const full = next === "FOCUS" ? 25 * 60 : 5 * 60;
+      const full = next === "FOCUS" ? pomoFocusFull : 5 * 60;
       setAlert(null); setPomoPhase(next); setPomoTotal(full); setPomoLeft(full); setPomoRunning(false);
     };
     alertNode = (
