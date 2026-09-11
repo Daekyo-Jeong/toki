@@ -909,7 +909,19 @@ type HookStatus = {
   // M4: 배터리 1순위 소스(statusLine) + Codex 훅. codex_available=false면
   // 행을 숨기지 않고 "미감지"로 보여준다 — 조건부 숨김 금지.
   statusline_installed: boolean; codex_available: boolean; codex_installed: boolean;
+  /** M9: 훅이 도는 POSIX 셸(Windows 는 Git for Windows)이 있나 */
+  shell_ok?: boolean;
+  /** M9: 에이전트 CLI 유무 + 없을 때 복사시킬 설치 명령 */
+  agents?: { id: string; label: string; cli: string | null; install_cmd: string; install_url: string }[];
 };
+
+/** 기본 브라우저로. 셸 안에서도 온보딩과 같은 경로를 쓴다. */
+async function openExternal(url: string) {
+  try {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  } catch { /* 열기 실패는 조용히 — 링크 하나가 화면을 죽일 이유는 없다 */ }
+}
 
 /** 코칭 백엔드 순환 — Rust `coach::BACKEND_CYCLE`과 같은 순서·값. */
 const BACKEND_CYCLE = ["auto", "claude", "codex", "ollama"];
@@ -937,9 +949,12 @@ const SETTINGS_ROWS: { id: string; label: string }[] = [
   { id: "notify", label: "알림" },
   { id: "autostart", label: "로그인 시 자동 실행" },
   { id: "sinceInstall", label: "설치 이후만 집계" },
-  { id: "hooks", label: "Claude Hooks" },
-  { id: "statusline", label: "Claude 상태줄" },
-  { id: "codexHooks", label: "Codex Hooks" },
+  // 이름은 **사용자가 얻는 것**으로(대교, 2026-09-11 실기: "상태줄"은 뭔지 모른다).
+  { id: "hooks", label: "Claude 기록 연동" },
+  { id: "statusline", label: "Claude 사용량 연동" },
+  { id: "codexHooks", label: "Codex 기록 연동" },
+  { id: "claudeCli", label: "Claude CLI" },
+  { id: "codexCli", label: "Codex CLI" },
   { id: "casing", label: "케이스 색상" },
   { id: "invert", label: "화면 반전" },
   { id: "onTop", label: "최상위 고정" },
@@ -1347,6 +1362,7 @@ export function TamagotchiShell({
   // V4-9: settings-in-CRT (cursor list, ▲▼변경 — same pattern as MENU).
   const [settingsCursor, setSettingsCursor] = useState(0);
   const [hook, setHook] = useState<HookStatus | null>(null);
+  const [cliCopied, setCliCopied] = useState<string | null>(null);
   const [resetArmed, setResetArmed] = useState(false);
   useEffect(() => {
     if (mode !== "settings") return;
@@ -1373,7 +1389,14 @@ export function TamagotchiShell({
       case "notify": return { kind: "cycle", text: (settings?.notifications_level ?? "impt").toUpperCase() };
       case "autostart": return { kind: "pill", on: !!settings?.autostart_enabled };
       case "sinceInstall": return { kind: "pill", on: !!settings?.track_since_install };
-      case "hooks": return { kind: "pill", on: !!hook?.installed };
+      // Windows 에 Git for Windows 가 없으면 훅이 아예 못 돈다 — 켜기 전에 말한다.
+      case "hooks": return hook?.shell_ok === false ? { kind: "text", text: "Git 필요" } : { kind: "pill", on: !!hook?.installed };
+      case "claudeCli": case "codexCli": {
+        const a = hook?.agents?.find((x) => x.id === (id === "claudeCli" ? "claude" : "codex"));
+        if (!a) return { kind: "text", text: "확인 중" };
+        if (cliCopied === a.id) return { kind: "text", text: "복사됨" };
+        return { kind: "text", text: a.cli ? "✓ 있음" : "설치 명령 복사" };
+      }
       case "statusline": return { kind: "pill", on: !!hook?.statusline_installed };
       case "codexHooks": return hook?.codex_available
         ? { kind: "pill", on: !!hook.codex_installed }
@@ -1399,7 +1422,17 @@ export function TamagotchiShell({
       const v = !settings?.track_since_install;
       patchSettings({ track_since_install: v, install_baseline_cache_read: v ? (settings?.install_baseline_cache_read ?? 0) : 0 });
     } else if (id === "hooks") {
-      toggleHooks(!hook?.installed);
+      if (hook?.shell_ok === false) openExternal("https://git-scm.com/downloads/win");
+      else toggleHooks(!hook?.installed);
+    } else if (id === "claudeCli" || id === "codexCli") {
+      const a = hook?.agents?.find((x) => x.id === (id === "claudeCli" ? "claude" : "codex"));
+      if (!a) return;
+      if (a.cli) { openExternal(a.install_url); return; }
+      copyToClipboard(a.install_cmd).then((ok) => {
+        if (!ok) return;
+        setCliCopied(a.id);
+        window.setTimeout(() => setCliCopied(null), 2000);
+      });
     } else if (id === "statusline") {
       runInstaller(hook?.statusline_installed ? "statusline_uninstall" : "statusline_install");
     } else if (id === "codexHooks") {
@@ -1472,7 +1505,7 @@ export function TamagotchiShell({
   useEffect(() => {
     if (hungry && !prevHungry.current && alert === null) {
       setAlert("hunger");
-      osNotify("토키가 배고파요", "5시간 사용량이 찼어요 — 밥(Claude) 주러 갈까요?", true);
+      osNotify("토키가 배고파요", "5시간 사용량이 찼어요 — 밥 주러 갈까요?", true);
     }
     prevHungry.current = hungry;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1534,7 +1567,9 @@ export function TamagotchiShell({
     setPomoLeft(nextFull);
     if (focusEnded) setPomoDone((d) => d + 1);
     setAlert("pomo");
-    osNotify("집중", focusEnded ? "집중 끝! 5분 쉬어가요." : "휴식 끝 — 다시 집중?", false);
+    // 사용자가 직접 건 타이머라 **중요** 알림이다 — false 면 기본 단계(impt)에서
+    // 토스트가 안 떠 "팝업만 뜬다"가 됐다(대교 실기, 2026-09-11).
+    osNotify("집중", focusEnded ? "집중 끝! 5분 쉬어가요." : "휴식 끝 — 다시 집중?", true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pomoLeft, pomoRunning, pomoPhase]);
 
@@ -1593,7 +1628,7 @@ export function TamagotchiShell({
         status={<><span>Lv.{lv}</span><span style={{ display: "flex", alignItems: "center", gap: 8 }}><Battery pct={usagePct} source={usageSource} agents={usageAgents} /><span className="pxmono9">{hhmm}</span></span></>}
         buttons={[
           { label: "메뉴", onClick: () => { setMode("menu"); setCursor(0); } },
-          { label: "밥", primary: true, onClick: () => invoke("open_claude").catch(() => {}) },
+          { label: "밥", primary: true, onClick: () => invoke("open_agent").catch(() => {}) },
           { label: "집중", onClick: () => setMode("pomo") },
         ]}
       >
@@ -2046,7 +2081,7 @@ export function TamagotchiShell({
     alertNode = (
       <AlertDialog
         title="경고" sprite={alertRows("hungry")} spriteScale={4}
-        ok="밥 주기" onOk={() => { setAlert(null); invoke("open_claude").catch(() => {}); }}
+        ok="밥 주기" onOk={() => { setAlert(null); invoke("open_agent").catch(() => {}); }}
         cancel="나중에" onCancel={() => setAlert(null)}
         copyright="©1986 tokisoft"
       >

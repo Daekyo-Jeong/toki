@@ -321,6 +321,32 @@ struct HookStatus {
     /// M9: 훅·statusLine이 도는 POSIX 셸이 있나. Windows는 Git for Windows가
     /// 있어야 true — 없으면 Claude Code가 PowerShell로 돌려 우리 한 줄이 죽는다.
     shell_ok: bool,
+    /// M9: 에이전트 CLI 유무 — 없으면 설치 명령을 보여주고 복사시킨다.
+    agents: Vec<AgentCli>,
+}
+
+/// 에이전트 CLI 한 줄 상태. 온보딩과 설정이 같은 것을 본다.
+#[derive(serde::Serialize, Clone)]
+struct AgentCli {
+    id: String,
+    label: String,
+    /// 찾은 실행 파일 경로. None 이면 미설치(또는 이 앱의 PATH 에서 안 보임).
+    cli: Option<String>,
+    install_cmd: String,
+    install_url: String,
+}
+
+fn agent_clis() -> Vec<AgentCli> {
+    [("claude", "Claude Code", "https://claude.com/claude-code"), ("codex", "Codex CLI", "https://developers.openai.com/codex/cli")]
+        .iter()
+        .map(|(id, label, url)| AgentCli {
+            id: id.to_string(),
+            label: label.to_string(),
+            cli: platform::resolve_cli(id).map(|p| p.to_string_lossy().to_string()),
+            install_cmd: platform::install_cmd(id).to_string(),
+            install_url: url.to_string(),
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -378,7 +404,7 @@ fn hooks_status(db: State<'_, Arc<db::Db>>) -> Result<HookStatus, String> {
     let codex_available = codex_hook_installer::is_available();
     let codex_installed = codex_hook_installer::is_installed().unwrap_or(false);
     let shell_ok = platform::posix_shell_available();
-    Ok(HookStatus { installed, port, received_count, statusline_installed, codex_available, codex_installed, shell_ok })
+    Ok(HookStatus { installed, port, received_count, statusline_installed, codex_available, codex_installed, shell_ok, agents: agent_clis() })
 }
 
 /// M4: Claude statusLine 인스톨러 — 배터리 1순위 소스를 사용자가 손 안 대고 켠다.
@@ -480,6 +506,10 @@ struct DetectedAgent {
     log_files: usize,
     /// CLI 설치 안내용.
     install_url: String,
+    /// M9: 실행 파일이 이 앱에서 보이나. 기록 폴더는 있는데 CLI 가 안 보이는
+    /// 경우(다른 계정·PATH 밖 설치)도 있어 `detected` 와 따로 둔다.
+    cli: Option<String>,
+    install_cmd: String,
 }
 
 /// v5 M6 — 첫 실행 온보딩에 필요한 것 전부. LLM 호출 없음.
@@ -538,6 +568,8 @@ fn onboarding_status(db: State<'_, Arc<db::Db>>) -> OnboardingStatus {
                     .unwrap_or_default(),
                 log_files,
                 install_url: install_url.to_string(),
+                cli: platform::resolve_cli(s.id().as_str()).map(|p| p.to_string_lossy().to_string()),
+                install_cmd: platform::install_cmd(s.id().as_str()).to_string(),
             }
         })
         .collect();
@@ -1031,44 +1063,17 @@ fn desk_debug_note(window: tauri::Window, line: String) {
     desk::debug_log(&format!("[{}] {}", window.label(), line));
 }
 
-/// v3: "Claude 열기" — the everyday entry point. Opens the Claude desktop
-/// app if installed, else claude.ai in the browser. Non-blocking.
+/// "밥" — 주 에이전트의 데스크톱 앱(없으면 웹)을 연다. 어느 에이전트인지는
+/// 코칭 LLM 설정이 claude/codex 로 고정돼 있으면 그것, 아니면(auto·ollama)
+/// **최근 활동 에이전트**, 그것도 없으면 Claude(대교, 2026-09-11 실기).
 #[tauri::command]
-fn open_claude() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        // Try the desktop app first; fall back to the website.
-        let app = std::process::Command::new("open")
-            .args(["-a", "Claude"])
-            .status();
-        let ok = matches!(app, Ok(s) if s.success());
-        if !ok {
-            let _ = std::process::Command::new("open")
-                .arg("https://claude.ai")
-                .status();
-        }
-        return Ok(());
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // Claude 데스크톱(Squirrel 설치: %LOCALAPPDATA%\AnthropicClaude\claude.exe)
-        // → 없으면 기본 브라우저. 경로는 문서가 아니라 관례라 M9 실기 항목.
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let exe = std::path::PathBuf::from(local).join("AnthropicClaude").join("claude.exe");
-            if exe.exists() && platform::quiet(&mut std::process::Command::new(&exe)).spawn().is_ok() {
-                return Ok(());
-            }
-        }
-        platform::quiet(&mut std::process::Command::new("cmd"))
-            .args(["/C", "start", "", "https://claude.ai"])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        Err("open_claude: unsupported platform".into())
-    }
+fn open_agent(db: State<'_, Arc<db::Db>>) -> Result<(), String> {
+    let s = db.load_settings().unwrap_or_default();
+    let agent = match s.coach_backend.as_str() {
+        "claude" | "codex" => s.coach_backend.clone(),
+        _ => db.last_active_agent().ok().flatten().unwrap_or_else(|| "claude".into()),
+    };
+    platform::open_agent_app(&agent).map_err(|e| e.to_string())
 }
 
 /// Recent raw hook events for the global Log view (timeline). Limit
@@ -1153,7 +1158,7 @@ pub fn run() {
             retrospective_get,
             retrospective_available,
             get_recent_events,
-            open_claude,
+            open_agent,
             set_click_rects,
             desk::desk_monitor,
             desk::desk_monitors,

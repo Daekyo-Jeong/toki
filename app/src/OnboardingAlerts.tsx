@@ -27,7 +27,13 @@ async function openExternal(url: string) {
 type DetectedAgent = {
   id: string; label: string; detected: boolean;
   path: string; log_files: number; install_url: string;
+  /** M9: 실행 파일이 보이나 — 기록 폴더만 있고 CLI 가 없는 경우가 있다 */
+  cli: string | null; install_cmd: string;
 };
+
+async function copyText(text: string): Promise<boolean> {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+}
 export type OnboardingStatus = {
   needed: boolean; agents: DetectedAgent[]; any_agent: boolean; events: number;
 };
@@ -53,6 +59,7 @@ export function OnboardingAlerts({ status, onDone }: {
   status: OnboardingStatus;
   onDone: () => void;
 }) {
+  const [copied, setCopied] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("hello");
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<string | null>(null);
@@ -176,21 +183,25 @@ export function OnboardingAlerts({ status, onDone }: {
             <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, color: a.detected ? "var(--phos)" : "var(--phos-dim)" }}>
               <span>{a.detected ? "✓" : "·"} {a.label}</span>
               <span style={{ fontFamily: "var(--pixel-mono-9)", fontSize: 10 }}>
-                {a.detected ? `${a.log_files}개 기록` : "없음"}
+                {a.detected ? `${a.log_files}개 기록` : "없음"}{a.cli ? "" : " · CLI 없음"}
               </span>
             </div>
           ))}
-          {!status.any_agent && (
+          {/* CLI 가 없는 에이전트는 **설치 명령을 복사**시킨다 — 링크만 주면 문서에서
+              헤맨다(대교 실기 2026-09-11: "설치 안내 필요, 세팅까지"). 설치 뒤
+              다음 화면(2/4)이 훅·사용량 연동까지 이어서 건다. */}
+          {status.agents.some((a) => !a.cli) && (
             <div style={{ marginTop: 6, color: "var(--phos-dim)", fontSize: 10, lineHeight: "15px", fontFamily: "var(--pixel-9)" }}>
-              둘 다 못 찾았어요. 하나를 설치하고 다시 켜면 그때부터 자라요.
-              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                {status.agents.map((a) => (
-                  <button key={a.id} className="cf-soft auto" style={{ fontSize: 10 }}
-                    onClick={() => openExternal(a.install_url)}>
-                    {a.label} 설치
+              {status.any_agent ? "CLI 가 안 보여요. 터미널에 붙여넣어 설치해요." : "둘 다 못 찾았어요. 하나를 설치하고 다시 켜면 그때부터 자라요."}
+              {status.agents.filter((a) => !a.cli).map((a) => (
+                <div key={a.id} style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center" }}>
+                  <button className="cf-soft auto" style={{ fontSize: 10 }}
+                    onClick={() => copyText(a.install_cmd).then((ok) => { if (ok) { setCopied(a.id); window.setTimeout(() => setCopied(null), 2000); } })}>
+                    {copied === a.id ? "복사됨" : `${a.label} 설치 명령 복사`}
                   </button>
-                ))}
-              </div>
+                  <button className="cf-soft auto" style={{ fontSize: 10 }} onClick={() => openExternal(a.install_url)}>안내</button>
+                </div>
+              ))}
             </div>
           )}
         </div>

@@ -96,7 +96,7 @@ if (import.meta.env.DEV && params.has("shell")) {
         if (cmd === "onboarding_status") {
           const n = Number(params.get("onboard") ?? -1);
           const mk = (id: string, label: string, on: boolean, files: number, url: string) =>
-            ({ id, label, detected: on, path: `~/.${id}`, log_files: on ? files : 0, install_url: url });
+            ({ id, label, detected: on, path: `~/.${id}`, log_files: on ? files : 0, install_url: url, cli: on ? `/usr/local/bin/${id}` : null, install_cmd: `install ${id}` });
           const agents = [
             mk("claude", "Claude Code", n >= 1, 128, "https://claude.com/claude-code"),
             mk("codex", "Codex CLI", n >= 2, 80, "https://developers.openai.com/codex/cli"),

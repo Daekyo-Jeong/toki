@@ -153,6 +153,41 @@ pub fn sprite_to_rgba(sprite: &str) -> (Vec<u8>, u32, u32) {
     (buf, w, h)
 }
 
+/// 배지형 래스터 — 어두운 둥근 바탕 + 전경색. macOS 템플릿과 달리 Windows는
+/// 알파를 마스크로 안 쓰고 픽셀을 그대로 그리므로, 흰 글리프는 밝은 작업표시줄에서
+/// 사라진다(대교 실기, 2026-09-11). `icons/tray-win.png`와 같은 색.
+pub fn sprite_to_rgba_badge(sprite: &str, fg: [u8; 3], bg: [u8; 3]) -> (Vec<u8>, u32, u32) {
+    let lines: Vec<&str> = sprite.trim_matches('\n').lines().collect();
+    let h = lines.len().max(1) as u32;
+    let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(16) as u32;
+    let mut buf = Vec::with_capacity((w * h * 4) as usize);
+    for (y, line) in lines.iter().enumerate() {
+        let chars: Vec<char> = line.chars().collect();
+        for x in 0..w as usize {
+            let corner = (x == 0 || x + 1 == w as usize) && (y == 0 || y + 1 == h as usize);
+            let ch = chars.get(x).copied().unwrap_or('.');
+            if ch == '#' || ch == '@' {
+                buf.extend_from_slice(&[fg[0], fg[1], fg[2], 255]);
+            } else if corner {
+                buf.extend_from_slice(&[0, 0, 0, 0]);
+            } else {
+                buf.extend_from_slice(&[bg[0], bg[1], bg[2], 255]);
+            }
+        }
+    }
+    (buf, w, h)
+}
+
+/// 경고 글리프의 플랫폼 판. macOS는 흰색(템플릿이 메뉴바에 맞춰 뒤집는다),
+/// 그 외는 배지.
+pub fn alert_rgba() -> (Vec<u8>, u32, u32) {
+    if cfg!(target_os = "macos") {
+        sprite_to_rgba(D_TRAY_ALERT)
+    } else {
+        sprite_to_rgba_badge(D_TRAY_ALERT, [0xe9, 0xea, 0xd0], [0x17, 0x17, 0x1a])
+    }
+}
+
 /// Pick the sprite for current state. Alert variant when hunger is high.
 pub fn sprite_for_state(stage: &str, hunger: i32) -> &'static str {
     if hunger >= 85 {

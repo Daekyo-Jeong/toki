@@ -203,7 +203,7 @@ export function SettingsView({ onClose, state }: { onClose: () => void; state: C
             label="Claude Hooks"
             sublabel={
               hook
-                ? `${hook.installed ? "✓ 설치됨" : "✗ 미설치"} · 포트 ${hook.port ?? "?"} · ${hook.received_count}건 수신${hook.shell_ok === false ? " · Git for Windows 필요" : ""}`
+                ? `${hook.installed ? "✓ 설치됨" : "✗ 미설치"} · 포트 ${hook.port ?? "?"} · ${hook.received_count}건 수신${hook.shell_ok === false ? " · 훅은 Git Bash로 돌아요 — Git for Windows 설치 필요" : ""}`
                 : "확인 중…"
             }
             right={hook ? <Toggle value={hook.installed} onChange={(v) => toggleHooks(v)} /> : null}

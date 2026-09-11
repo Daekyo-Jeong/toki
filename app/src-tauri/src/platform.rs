@@ -8,8 +8,11 @@
 //! 문서(Claude Code setup·statusline·hooks)와 Win32 API 의미이고, 실측은
 //! plan.md M9 검증표가 담당한다.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// GUI 앱이 자식을 띄우면 Windows는 콘솔 창을 하나 번쩍인다 — `claude.cmd`
 /// 같은 배치 셸이면 더 확실히. `CREATE_NO_WINDOW`로 막는다. 에이전트 CLI를
@@ -53,9 +56,39 @@ fn lookup_on_path(name: &str) -> Option<PathBuf> {
     found.into_iter().next()
 }
 
-/// 에이전트 CLI(`claude`·`codex`) 경로 — PATH → 흔한 설치 경로. Finder·탐색기에서
-/// 띄운 앱은 로그인 셸 PATH를 못 받으므로 2단계가 실제 사용자 대부분을 잡는다.
+/// 탐색 결과 캐시. 설정 화면이 2초마다 상태를 묻는데 그때마다 `which`/`where`
+/// 프로세스를 띄울 순 없다. 20초면 "방금 설치했다"도 곧 반영된다.
+static CACHE: Mutex<Option<HashMap<String, (Instant, Option<PathBuf>)>>> = Mutex::new(None);
+const CACHE_TTL: Duration = Duration::from_secs(20);
+
+/// 에이전트 CLI(`claude`·`codex`) 경로. 순서: 환경변수 `TOKI_<NAME>_BIN`(설치
+/// 경로가 특이한 사람용 수동 지정) → 캐시 → PATH → 흔한 설치 경로.
 pub fn resolve_cli(name: &str) -> Option<PathBuf> {
+    if let Some(v) = std::env::var_os(format!("TOKI_{}_BIN", name.to_ascii_uppercase())) {
+        let p = PathBuf::from(v);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Some(m) = CACHE.lock().unwrap().as_ref() {
+        if let Some((t, v)) = m.get(name) {
+            if t.elapsed() < CACHE_TTL {
+                return v.clone();
+            }
+        }
+    }
+    let found = resolve_cli_uncached(name);
+    CACHE
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(name.to_string(), (Instant::now(), found.clone()));
+    found
+}
+
+/// PATH → 흔한 설치 경로. Finder·탐색기에서 띄운 앱은 로그인 셸 PATH를 못
+/// 받으므로 2단계가 실제 사용자 대부분을 잡는다.
+fn resolve_cli_uncached(name: &str) -> Option<PathBuf> {
     if let Some(p) = lookup_on_path(name) {
         return Some(p);
     }
@@ -120,6 +153,65 @@ pub fn shell_path(p: &Path) -> String {
     } else {
         s
     }
+}
+
+/// 그 CLI를 이 OS에 까는 한 줄 — 없을 때 화면이 보여주고 복사시킨다(Claude Code
+/// setup 문서 · Codex README). 설치 URL은 lib.rs `DetectedAgent.install_url`.
+pub fn install_cmd(name: &str) -> &'static str {
+    match (name, cfg!(windows)) {
+        ("claude", true) => "irm https://claude.ai/install.ps1 | iex",
+        ("claude", false) => "curl -fsSL https://claude.ai/install.sh | bash",
+        ("codex", _) => "npm install -g @openai/codex",
+        _ => "",
+    }
+}
+
+/// 기본 브라우저로 URL. 실패는 호출자가 결정한다.
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        quiet(&mut Command::new("open")).arg(url).spawn().map(|_| ())
+    }
+    #[cfg(windows)]
+    {
+        quiet(&mut Command::new("cmd")).args(["/C", "start", "", url]).spawn().map(|_| ())
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        quiet(&mut Command::new("xdg-open")).arg(url).spawn().map(|_| ())
+    }
+}
+
+/// 에이전트의 **데스크톱 앱**을 띄운다 — 없으면 웹. "밥" 버튼이 부른다(대교
+/// 실기 2026-09-11: 주 에이전트에 따라 다른 게 떠야 한다). Windows 경로는
+/// 문서가 아니라 관례(Squirrel·Electron 기본 설치 위치)라 존재 확인 뒤에만 쓴다.
+pub fn open_agent_app(agent: &str) -> std::io::Result<()> {
+    let (mac_app, win_rel, url) = match agent {
+        "codex" => ("Codex", "Programs\\Codex\\Codex.exe", "https://chatgpt.com/codex"),
+        _ => ("Claude", "AnthropicClaude\\claude.exe", "https://claude.ai"),
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let ok = quiet(&mut Command::new("open")).args(["-a", mac_app]).status().map(|s| s.success()).unwrap_or(false);
+        if ok {
+            return Ok(());
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = mac_app;
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let exe = PathBuf::from(local).join(win_rel);
+            if exe.exists() && quiet(&mut Command::new(&exe)).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = (mac_app, win_rel);
+    }
+    open_url(url)
 }
 
 /// 세션 로그의 `cwd`가 임시 폴더인가(프로젝트 귀속에서 제외). macOS는

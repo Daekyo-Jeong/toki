@@ -348,7 +348,7 @@ fn update_tray_icon(app: &AppHandle, _save: &CharacterSave, last_key: &mut Strin
     };
     let res = match &alert {
         Some(_) => {
-            let (buf, w, h) = crate::tray_sprite::sprite_to_rgba(crate::tray_sprite::D_TRAY_ALERT);
+            let (buf, w, h) = crate::tray_sprite::alert_rgba();
             tray.set_icon(Some(tauri::image::Image::new_owned(buf, w, h)))
         }
         None => tray.set_icon(Some(crate::tray_icon())),
