@@ -94,9 +94,12 @@ fi
 
 OUT="$APP_DIR/src-tauri/target/$TARGET/release/bundle"
 APP_PATH="$OUT/macos/$APP_NAME.app"
-DMG_PATH=$(ls "$OUT/dmg/"*.dmg 2>/dev/null | head -1 || true)
+# **버전이 박힌 파일명으로 집는다.** `ls | head -1` 은 이전 버전이 남아 있으면
+# 알파벳 순으로 옛 것을 집는다 — 2026-09-11 1.0.2 릴리스 세트에 1.0.1 exe 가
+# 들어갔다(파일명만 1.0.2 로 바뀌어 체크섬으로도 못 잡는다). 세대 혼입의 네 번째 방식.
+DMG_PATH="$OUT/dmg/Toki_${VERSION}_aarch64.dmg"
 [ -d "$APP_PATH" ] || { echo "✗ $APP_PATH 없음" >&2; exit 1; }
-[ -n "$DMG_PATH" ] || { echo "✗ dmg 없음 ($OUT/dmg)" >&2; exit 1; }
+[ -f "$DMG_PATH" ] || { echo "✗ $DMG_PATH 없음 — 이 버전으로 빌드됐는지 확인" >&2; exit 1; }
 
 # ── 검증 — 여기서 걸러야 사용자 맥에서 안 걸린다 ───────────────────────────
 echo "→ 서명 확인"
@@ -147,8 +150,8 @@ printf '%s\n' "$VERSION"  > "$BUILD/latest/version.txt"
 printf '%s\n' "$DMG_NAME" > "$BUILD/latest/macos.txt"
 if [ "$DO_WIN" -eq 1 ]; then
   WIN_OUT="$APP_DIR/src-tauri/target/$WIN_TARGET/release/bundle/nsis"
-  WIN_SRC=$(ls "$WIN_OUT/"*-setup.exe 2>/dev/null | head -1 || true)
-  [ -n "$WIN_SRC" ] || { echo "✗ Windows setup.exe 없음 ($WIN_OUT)" >&2; exit 1; }
+  WIN_SRC="$WIN_OUT/Toki_${VERSION}_x64-setup.exe"
+  [ -f "$WIN_SRC" ] || { echo "✗ $WIN_SRC 없음 — 이 버전으로 빌드됐는지 확인" >&2; exit 1; }
   # 파일명은 dmg 와 같은 규칙: 제품-버전-아키텍처.
   WIN_NAME="Toki-$VERSION-x64-setup.exe"
   cp "$WIN_SRC" "$BUILD/latest/$WIN_NAME"
