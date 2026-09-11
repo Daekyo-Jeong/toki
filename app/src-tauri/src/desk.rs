@@ -150,7 +150,8 @@ pub fn desk_monitors(app: tauri::AppHandle) -> Vec<MonitorInfo> {
 /// 파일로 남긴다(2026-09-03: 그렇게 진단하다 트레이를 날렸다).
 ///
 /// **주기적으로 부르지 않는다.** 창 생성·정리처럼 드물게 일어나는 사건만 남긴다 —
-/// 3초 폴링을 찍었더니 파일이 끝없이 자랐다.
+/// 3초 폴링을 찍었더니 파일이 끝없이 자랐다. 예외는 클릭스루 진단(lib.rs) —
+/// 창이 보인 뒤 20초 동안만 3초에 한 줄이고, 1MB 회전이 있다.
 pub fn debug_log(line: &str) {
     let Some(p) = dirs::home_dir().map(|h| h.join(".toki").join("desk-debug.log")) else { return };
     use std::io::Write;
@@ -171,6 +172,21 @@ pub fn sync_windows(app: &tauri::AppHandle) {
     let mons = monitors(app);
     if mons.is_empty() {
         return;
+    }
+    // 모니터 구성이 바뀔 때만 표를 남긴다 — 듀얼 모니터 보고를 실기 없이 볼 근거.
+    {
+        static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        let table = mons
+            .iter()
+            .map(|m| format!("{}={} {}x{}@({},{}) x{:.2}{}", m.window, m.key, m.width, m.height, m.x, m.y, m.scale, if m.primary { " primary" } else { "" }))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        if let Ok(mut last) = LAST.lock() {
+            if *last != table {
+                debug_log(&format!("monitors: {table}"));
+                *last = table;
+            }
+        }
     }
     let want: std::collections::HashSet<String> = mons.iter().map(|m| m.window.clone()).collect();
 

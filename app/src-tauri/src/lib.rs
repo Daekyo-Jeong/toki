@@ -938,6 +938,9 @@ fn spawn_click_through(app: tauri::AppHandle, rects: ClickRects) {
         // 창마다 마지막 상태를 따로 기억한다 — 한 창의 토글이 다른 창의
         // 판정을 덮으면 커서가 없는 화면이 계속 인터랙티브로 남는다.
         let mut last_ignore: std::collections::HashMap<String, bool> = Default::default();
+        // 창이 **보이기 시작한 시각**. "아직 보고 안 한 창은 조작 가능" 규칙에 유예를
+        // 두기 위한 것 — 아래 click_through_tick 참고.
+        let mut seen: std::collections::HashMap<String, std::time::Instant> = Default::default();
         let mut last_emit: Option<(f64, f64)> = None;
         let mut tick: u32 = 0;
         loop {
@@ -950,7 +953,7 @@ fn spawn_click_through(app: tauri::AppHandle, rects: ClickRects) {
                 .cloned()
                 .collect();
             for label in labels {
-                click_through_tick(&app, &rects, &label, &mut last_ignore, &mut last_emit, tick);
+                click_through_tick(&app, &rects, &label, &mut last_ignore, &mut seen, &mut last_emit, tick);
             }
         }
     });
@@ -962,12 +965,19 @@ fn click_through_tick(
     rects: &ClickRects,
     label: &str,
     last_ignore: &mut std::collections::HashMap<String, bool>,
+    seen: &mut std::collections::HashMap<String, std::time::Instant>,
     last_emit: &mut Option<(f64, f64)>,
     tick: u32,
 ) {
+    /// 보고 없는 창을 조작 가능으로 두는 유예. 셸이 기동 직후 먹통이 되지 않을
+    /// 만큼만 — 프런트는 마운트 뒤 1초 안에 첫 보고를 한다.
+    const UNREPORTED_GRACE: std::time::Duration = std::time::Duration::from_secs(4);
+    /// 보인 뒤 이 시간 동안은 3초마다 판정 근거를 파일에 남긴다(진단).
+    const DIAG_WINDOW: std::time::Duration = std::time::Duration::from_secs(20);
     {
         let Some(win) = app.get_webview_window(label) else { return };
         if !win.is_visible().unwrap_or(false) {
+            seen.remove(label);
             // Reset so the shell is interactive the instant it reappears.
             if last_ignore.get(label) != Some(&false) {
                 let _ = win.set_ignore_cursor_events(false);
@@ -975,6 +985,7 @@ fn click_through_tick(
             }
             return;
         }
+        let since = *seen.entry(label.to_string()).or_insert_with(std::time::Instant::now);
         let cursor = match win.cursor_position() { Ok(c) => c, Err(_) => return };
         let pos = match win.outer_position() { Ok(p) => p, Err(_) => return };
             let sf = win.scale_factor().unwrap_or(1.0);
@@ -1042,17 +1053,28 @@ fn click_through_tick(
                 mine.is_none(),
             )
         };
-        // 프런트가 **한 번도** 보고하지 않은 창만 조작 가능으로 둔다(기동 직후
-        // 셸이 먹통이 되는 걸 막는 원래 목적). 빈 배열을 보고한 창은 통째로 클릭스루.
-        let ignore = if unreported { false } else { !inside };
-        if last_ignore.get(label) != Some(&ignore) {
+        // 프런트가 **한 번도** 보고하지 않은 창은 조작 가능으로 둔다(기동 직후
+        // 셸이 먹통이 되는 걸 막는 원래 목적) — 단 **유예 안에서만.** 보고가 영영
+        // 안 오는 창(프런트가 죽었거나 invoke 가 막힌 경우)을 조작 가능으로 두면
+        // 투명한 전체화면이 그 모니터의 클릭을 전부 삼킨다. Windows 듀얼 모니터
+        // 보고("시작부터 클릭이 안 된다", 2026-09-11)가 정확히 그 모양이라 유예를
+        // 넘기면 클릭스루로 떨어뜨린다. 빈 배열을 보고한 창은 원래대로 통째로 클릭스루.
+        let grace = since.elapsed() < UNREPORTED_GRACE;
+        let ignore = if unreported { !grace } else { !inside };
+        let changed = last_ignore.get(label) != Some(&ignore);
+        if changed {
             let _ = win.set_ignore_cursor_events(ignore);
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[clickthru] {label} cursor_rel=({:.0},{:.0}) unreported={} inside={} -> ignore={}",
-                cx, cy, unreported, inside, ignore
-            );
             last_ignore.insert(label.to_string(), ignore);
+        }
+        // 진단: 판정이 바뀔 때 + 보인 뒤 20초 동안 3초마다. 실기 없이 원인을
+        // 잡으려면 사용자 기기의 이 숫자들이 필요하다(~/.toki/desk-debug.log).
+        if changed || (since.elapsed() < DIAG_WINDOW && tick % 100 == 0) {
+            let n = rects.lock().ok().and_then(|g| g.get(label).map(|v| v.len()));
+            desk::debug_log(&format!(
+                "[clickthru] {label} cursor=({:.0},{:.0}) win=({},{}) sf={:.2} rel=({:.0},{:.0}) rects={} inside={} grace={} -> ignore={}",
+                cursor.x, cursor.y, pos.x, pos.y, sf, cx, cy,
+                n.map(|k| k.to_string()).unwrap_or_else(|| "none".into()), inside, grace, ignore
+            ));
         }
     }
 }
