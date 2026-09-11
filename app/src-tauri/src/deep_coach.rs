@@ -143,6 +143,23 @@ fn codex_prompt_from_line(line: &str) -> Option<(DateTime<Utc>, String)> {
     Some((ts, text.to_string()))
 }
 
+/// 롤아웃 첫 줄(`session_meta`)로 **사람이 친 세션**인지 가른다. 이 맥 실측
+/// (2026-09-11): `source:"exec"`(originator codex_exec·codex_sdk_ts — 도구가
+/// `codex exec` 로 보낸 것) 244+31건, `source:{subagent:…}`(부모 메시지를 복사해
+/// 오는 서브에이전트 스레드) 16건, 사람 세션은 `"vscode"`·`"cli"` 16건. 도구
+/// 세션을 섞으면 "코칭"이 자기 프롬프트를 분석한다.
+fn codex_session_is_human(first_line: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(first_line.trim()) else { return true };
+    if v.get("type").and_then(|t| t.as_str()) != Some("session_meta") {
+        return true;
+    }
+    match v.get("payload").and_then(|p| p.get("source")) {
+        Some(serde_json::Value::String(src)) => src != "exec",
+        Some(serde_json::Value::Object(_)) => false, // subagent
+        _ => true,
+    }
+}
+
 /// `~/.codex/sessions/**/rollout-*.jsonl` 에서 창 안의 프롬프트. 파일 이름에 날짜가
 /// 박혀 있어(`rollout-2026-09-11T…`) 창 밖 파일은 열지도 않는다. 한 파일 안에
 /// `user_message` 이벤트가 있으면 그것만(둘이 같은 프롬프트를 두 번 담는다),
@@ -175,6 +192,9 @@ fn read_codex_history(days: i64) -> Vec<HistEntry> {
     let mut seen: std::collections::HashSet<(String, String)> = Default::default();
     for f in files {
         let Ok(raw) = std::fs::read_to_string(&f) else { continue };
+        if !raw.lines().next().map(codex_session_is_human).unwrap_or(true) {
+            continue;
+        }
         let mut project = String::from("?");
         let mut events: Vec<(DateTime<Utc>, String)> = Vec::new();
         let mut items: Vec<(DateTime<Utc>, String)> = Vec::new();
@@ -833,6 +853,21 @@ mod tests {
         for e in v.iter().rev().take(3) {
             eprintln!("  {} [{}] {}", e.ts.format("%m-%d %H:%M"), e.project, e.display.chars().take(60).collect::<String>());
         }
+    }
+
+    /// exec·서브에이전트 세션은 사람이 친 게 아니다 — 파일째 건너뛴다.
+    #[test]
+    fn codex_session_source_gate() {
+        let exec = r#"{"type":"session_meta","payload":{"originator":"codex_exec","source":"exec"}}"#;
+        let sub = r#"{"type":"session_meta","payload":{"originator":"Codex Desktop","source":{"subagent":{"other":"guardian"}}}}"#;
+        let vscode = r#"{"type":"session_meta","payload":{"originator":"Codex Desktop","source":"vscode"}}"#;
+        let cli = r#"{"type":"session_meta","payload":{"originator":"codex-tui","source":"cli"}}"#;
+        let old = r#"{"type":"session_meta","payload":{"id":"x"}}"#; // 옛 버전: source 없음 → 사람으로 본다
+        assert!(!codex_session_is_human(exec));
+        assert!(!codex_session_is_human(sub));
+        assert!(codex_session_is_human(vscode));
+        assert!(codex_session_is_human(cli));
+        assert!(codex_session_is_human(old));
     }
 
     /// Codex 롤아웃: 사용자 발화만 남고, 주입된 AGENTS.md·환경 문맥은 걸러진다.
