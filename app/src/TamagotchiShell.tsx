@@ -19,6 +19,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppSettings } from "./Settings";
 import { casingVars, CASES, renderMarkdown } from "./components";
 
@@ -1201,6 +1202,12 @@ export function TamagotchiShell({
   const [gaze, setGaze] = useState({ dx: 0, dy: 0 });
   const petBoxRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
+    // Rust 는 창마다 `emit_to(label)` 로 **자기 창 좌표**를 쏜다. 그걸 받으려면
+    // 리스너도 자기 라벨을 타깃으로 걸어야 한다 — 기본 `listen()`(target: Any)은
+    // 라벨 지정 이벤트를 **못 받는다**(tauri manager::filter_target, `_ => false`).
+    // 프리뷰(브라우저)엔 창이 없으니 Any 로 둔다.
+    let target: { kind: "AnyLabel"; label: string } | undefined;
+    try { target = { kind: "AnyLabel", label: getCurrentWindow().label }; } catch { target = undefined; }
     const un = listen<[number, number]>("cursor-pos", (e) => {
       const el = petBoxRef.current;
       if (!el) return; // pet only shows on home
@@ -1217,7 +1224,7 @@ export function TamagotchiShell({
       const uy = cy - scy;
       const dy = Math.abs(uy) < dead ? 0 : Math.sign(uy);
       setGaze((g) => (g.dx === dx && g.dy === dy ? g : { dx, dy }));
-    });
+    }, target ? { target } : undefined);
     return () => { un.then((f) => f()).catch(() => {}); };
   }, []);
 
