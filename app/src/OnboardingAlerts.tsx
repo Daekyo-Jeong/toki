@@ -225,7 +225,7 @@ export function OnboardingAlerts({ status, onDone }: {
             {[
               { on: hasClaude, label: "훅", path: "~/.claude/settings.json" },
               { on: hasClaude, label: "상태줄", path: "사용률 표시용" },
-              { on: hasCodex, label: "Codex 훅", path: "~/.codex/hooks.json" },
+              { on: hasCodex, label: "GPT 훅", path: "~/.codex/hooks.json" },
             ].map((row, i) => (
               <div key={i} style={{ opacity: row.on ? 1 : 0.45 }}>
                 · {row.label} — <span style={{ color: row.on ? "var(--phos)" : "inherit" }}>{row.path}</span>
@@ -234,7 +234,7 @@ export function OnboardingAlerts({ status, onDone }: {
             ))}
             <div style={{ marginTop: 5 }}>
               쓰던 설정은 백업하고 이어 붙여요. 설정에서 언제든 끌 수 있어요.
-              {hasCodex && <><br />Codex는 처음 한 번 codex 안에서 훅 신뢰를 승인해야 해요.</>}
+              {hasCodex && <><br />GPT(Codex CLI)는 처음 한 번 codex 안에서 훅 신뢰를 승인해야 해요.</>}
             </div>
             {installNote && <div style={{ marginTop: 5, color: "var(--phos)" }}>{installNote}</div>}
           </div>

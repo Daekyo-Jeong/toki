@@ -183,35 +183,56 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
 }
 
 /// 에이전트의 **데스크톱 앱**을 띄운다 — 없으면 웹. "밥" 버튼이 부른다(대교
-/// 실기 2026-09-11: 주 에이전트에 따라 다른 게 떠야 한다). Windows 경로는
-/// 문서가 아니라 관례(Squirrel·Electron 기본 설치 위치)라 존재 확인 뒤에만 쓴다.
+/// 실기 2026-09-11: 주 에이전트에 따라 다른 게 떠야 한다).
+///
+/// Windows 는 설치 경로를 추측하지 않는다 — Store 앱(ChatGPT)은 `%LOCALAPPDATA%`
+/// 아래에 없고, 첫 판의 `Programs\Codex\Codex.exe` 추측은 실기에서 늘 웹으로
+/// 떨어졌다. `Get-StartApps` 가 시작 메뉴에 등록된 앱(Store·Win32 둘 다)을 이름과
+/// AppID 로 주니 그걸로 `shell:AppsFolder\<AppID>` 를 연다.
 pub fn open_agent_app(agent: &str) -> std::io::Result<()> {
-    let (mac_app, win_rel, url) = match agent {
-        "codex" => ("Codex", "Programs\\Codex\\Codex.exe", "https://chatgpt.com/codex"),
-        _ => ("Claude", "AnthropicClaude\\claude.exe", "https://claude.ai"),
+    let (apps, url): (&[&str], &str) = match agent {
+        "codex" => (&["Codex", "ChatGPT"], "https://chatgpt.com/codex"),
+        _ => (&["Claude"], "https://claude.ai"),
     };
     #[cfg(target_os = "macos")]
     {
-        let ok = quiet(&mut Command::new("open")).args(["-a", mac_app]).status().map(|s| s.success()).unwrap_or(false);
-        if ok {
-            return Ok(());
+        for app in apps {
+            let ok = quiet(&mut Command::new("open")).args(["-a", app]).status().map(|s| s.success()).unwrap_or(false);
+            if ok {
+                return Ok(());
+            }
         }
     }
     #[cfg(windows)]
     {
-        let _ = mac_app;
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let exe = PathBuf::from(local).join(win_rel);
-            if exe.exists() && quiet(&mut Command::new(&exe)).spawn().is_ok() {
+        if let Some(app_id) = windows_start_app_id(apps) {
+            let target = format!("shell:AppsFolder\\{app_id}");
+            if quiet(&mut Command::new("explorer.exe")).arg(&target).spawn().is_ok() {
                 return Ok(());
             }
         }
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        let _ = (mac_app, win_rel);
+        let _ = apps;
     }
     open_url(url)
+}
+
+/// 시작 메뉴 앱 목록에서 이름이 정확히 일치하는 첫 AppID. 이름 순서가 우선순위.
+#[cfg(windows)]
+fn windows_start_app_id(names: &[&str]) -> Option<String> {
+    let out = quiet(&mut Command::new("powershell.exe"))
+        .args(["-NoProfile", "-NonInteractive", "-Command",
+               "Get-StartApps | ForEach-Object { $_.Name + '`t' + $_.AppID }"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let rows: Vec<(String, String)> = text
+        .lines()
+        .filter_map(|l| l.split_once('\t').map(|(n, id)| (n.trim().to_string(), id.trim().to_string())))
+        .collect();
+    names.iter().find_map(|want| rows.iter().find(|(n, _)| n.eq_ignore_ascii_case(want)).map(|(_, id)| id.clone()))
 }
 
 /// 세션 로그의 `cwd`가 임시 폴더인가(프로젝트 귀속에서 제외). macOS는

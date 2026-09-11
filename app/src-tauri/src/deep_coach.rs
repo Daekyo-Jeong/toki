@@ -97,10 +97,113 @@ fn read_history(days: i64) -> Vec<HistEntry> {
     out
 }
 
+/// Codex 롤아웃 한 줄 → 사용자가 친 프롬프트. 두 모양을 받는다:
+/// `event_msg`/`user_message`(`message`) 와 `response_item`/`message`/role=user
+/// (`content[].input_text`). 후자에는 Codex 가 주입하는 `# AGENTS.md instructions`,
+/// `<environment_context>` 같은 것도 role=user 로 섞여 있어 걸러낸다.
+/// GPT(Codex)만 쓰는 사람은 `~/.claude/history.jsonl` 이 없어 딥 코칭이 "비어
+/// 있다"고 거절했다(Windows 실기 보고, 2026-09-11).
+fn codex_prompt_from_line(line: &str) -> Option<(DateTime<Utc>, String)> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let ts = v.get("timestamp")?.as_str()?;
+    let ts = DateTime::parse_from_rfc3339(ts).ok()?.with_timezone(&Utc);
+    let payload = v.get("payload")?;
+    let text = match v.get("type")?.as_str()? {
+        "event_msg" if payload.get("type").and_then(|t| t.as_str()) == Some("user_message") => {
+            payload.get("message")?.as_str()?.to_string()
+        }
+        "response_item"
+            if payload.get("type").and_then(|t| t.as_str()) == Some("message")
+                && payload.get("role").and_then(|r| r.as_str()) == Some("user") =>
+        {
+            payload
+                .get("content")?
+                .as_array()?
+                .iter()
+                .filter(|c| c.get("type").and_then(|t| t.as_str()) == Some("input_text"))
+                .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        _ => return None,
+    };
+    let text = text.trim();
+    // 주입된 문맥은 사용자 발화가 아니다.
+    if text.is_empty() || text.starts_with('<') || text.starts_with("# AGENTS.md") || text.contains("<environment_context>") {
+        return None;
+    }
+    Some((ts, text.to_string()))
+}
+
+/// `~/.codex/sessions/**/rollout-*.jsonl` 에서 창 안의 프롬프트. 파일 이름에 날짜가
+/// 박혀 있어(`rollout-2026-09-11T…`) 창 밖 파일은 열지도 않는다. 한 파일 안에
+/// `user_message` 이벤트가 있으면 그것만(둘이 같은 프롬프트를 두 번 담는다),
+/// 없으면 response_item 으로 떨어진다. 프로젝트는 `turn_context`/`session_meta` 의 cwd.
+fn read_codex_history(days: i64) -> Vec<HistEntry> {
+    let Some(root) = dirs::home_dir().map(|h| h.join(".codex").join("sessions")) else {
+        return Vec::new();
+    };
+    let cutoff = Utc::now() - chrono::Duration::days(days);
+    let cutoff_day = cutoff.format("%Y-%m-%d").to_string();
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                // rollout-YYYY-MM-DDT… — 날짜 문자열 비교로 창 밖을 거른다.
+                if name.starts_with("rollout-") && name.ends_with(".jsonl") && name[8..].get(..10).map(|d| d >= cutoff_day.as_str()).unwrap_or(true) {
+                    files.push(p);
+                }
+            }
+        }
+    }
+    let mut out: Vec<HistEntry> = Vec::new();
+    for f in files {
+        let Ok(raw) = std::fs::read_to_string(&f) else { continue };
+        let mut project = String::from("?");
+        let mut events: Vec<(DateTime<Utc>, String)> = Vec::new();
+        let mut items: Vec<(DateTime<Utc>, String)> = Vec::new();
+        for line in raw.lines() {
+            if project == "?" || line.contains("\"turn_context\"") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                    if let Some(cwd) = v.get("payload").and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
+                        if !crate::platform::is_transient_cwd(cwd) {
+                            project = short_project(cwd);
+                        }
+                    }
+                }
+            }
+            if let Some((ts, text)) = codex_prompt_from_line(line) {
+                if ts < cutoff {
+                    continue;
+                }
+                if line.contains("\"user_message\"") { events.push((ts, text)) } else { items.push((ts, text)) }
+            }
+        }
+        let picked = if events.is_empty() { items } else { events };
+        for (ts, display) in picked {
+            out.push(HistEntry { ts: ts.with_timezone(&Local), project: project.clone(), display });
+        }
+    }
+    out
+}
+
+/// Claude 와 GPT(Codex) 히스토리를 합쳐 시간순으로.
+fn read_all_history(days: i64) -> Vec<HistEntry> {
+    let mut all = read_history(days);
+    all.extend(read_codex_history(days));
+    all.sort_by_key(|e| e.ts);
+    all
+}
+
 /// "/Users/me/work/projects/toki" → "toki". 프로젝트 경로는
 /// 근거 표시용 라벨로만 쓰므로 leaf면 충분하다.
 fn short_project(p: &str) -> String {
-    p.trim_end_matches('/').rsplit('/').next().unwrap_or(p).to_string()
+    p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(p).to_string()
 }
 
 /// 슬래시 커맨드 사용 빈도 — Image-#2급 제안("statusline 세팅 — /usage를 수십
@@ -553,7 +656,7 @@ pub struct DeepPreview {
 }
 
 pub fn preview(backend: &crate::coach::Backend) -> DeepPreview {
-    let entries = read_history(HISTORY_DAYS);
+    let entries = read_all_history(HISTORY_DAYS);
     let (_, n_prompts) = history_block(&entries);
     let home = dirs::home_dir().unwrap_or_default();
     let sources = detect_memory_sources(&home);
@@ -577,10 +680,10 @@ pub fn preview(backend: &crate::coach::Backend) -> DeepPreview {
 /// 설정을 따른다(`coach::Backend::resolve`) — Ollama를 골랐으면 로컬로 돈다
 /// (문맥이 짧아 품질은 떨어지지만 밖으로 안 나간다는 게 그 선택의 이유다).
 pub fn generate_deep(backend: &crate::coach::Backend) -> Result<DeepCoaching> {
-    let entries = read_history(HISTORY_DAYS);
+    let entries = read_all_history(HISTORY_DAYS);
     if entries.is_empty() {
         return Err(anyhow!(
-            "최근 {}일 프롬프트 히스토리(~/.claude/history.jsonl)가 비어 있어요",
+            "최근 {}일 프롬프트 히스토리가 비어 있어요 (Claude ~/.claude/history.jsonl · GPT ~/.codex/sessions)",
             HISTORY_DAYS
         ));
     }
@@ -703,6 +806,36 @@ mod tests {
         assert_eq!(v[0], ("/usage".into(), 3));
         // /model은 1회 → 게이트(≥2)에서 탈락
         assert!(!v.iter().any(|(c, _)| c == "/model"));
+    }
+
+    /// 실기 확인용(무시됨): 이 맥의 실제 ~/.codex/sessions 에서 30일치 프롬프트를 센다.
+    /// `cargo test read_codex_history_on_this_machine -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn read_codex_history_on_this_machine() {
+        let v = read_codex_history(30);
+        eprintln!("codex prompts(30d) = {}", v.len());
+        for e in v.iter().rev().take(3) {
+            eprintln!("  {} [{}] {}", e.ts.format("%m-%d %H:%M"), e.project, e.display.chars().take(60).collect::<String>());
+        }
+    }
+
+    /// Codex 롤아웃: 사용자 발화만 남고, 주입된 AGENTS.md·환경 문맥은 걸러진다.
+    #[test]
+    fn codex_prompt_line_filters_injected_context() {
+        let user = r#"{"timestamp":"2026-09-11T01:02:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"read_graph 툴로 노드 개수만"}]}}"#;
+        let (ts, t) = codex_prompt_from_line(user).unwrap();
+        assert_eq!(t, "read_graph 툴로 노드 개수만");
+        assert_eq!(ts.format("%Y-%m-%dT%H:%M:%S").to_string(), "2026-09-11T01:02:03");
+        // `"#` 가 본문에 있어 r##"…"## 로 감싼다.
+        let injected = r##"{"timestamp":"2026-09-11T01:02:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n<INSTRUCTIONS>..."}]}}"##;
+        assert!(codex_prompt_from_line(injected).is_none());
+        let env = r#"{"timestamp":"2026-09-11T01:02:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]}}"#;
+        assert!(codex_prompt_from_line(env).is_none());
+        let assistant = r#"{"timestamp":"2026-09-11T01:02:03.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"답"}]}}"#;
+        assert!(codex_prompt_from_line(assistant).is_none());
+        let ev = r#"{"timestamp":"2026-09-11T01:02:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"안녕"}}"#;
+        assert_eq!(codex_prompt_from_line(ev).unwrap().1, "안녕");
     }
 
     #[test]

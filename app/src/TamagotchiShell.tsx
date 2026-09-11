@@ -929,7 +929,7 @@ const BACKEND_CYCLE = ["auto", "claude", "codex", "ollama"];
 function backendLabel(v?: string): string {
   switch (v) {
     case "claude": return "CLAUDE";
-    case "codex": return "CODEX";
+    case "codex": return "GPT";
     case "ollama": return "LOCAL";
     default: return "AUTO";
   }
@@ -969,7 +969,7 @@ const SETTINGS_GROUPS: Record<string, { title: string; rows: SettingsRow[] }> = 
     { id: "promptsReset", label: "코칭 프롬프트" },
     // 이름은 **사용자가 얻는 것**으로("상태줄"은 뭔지 모른다 — 대교 실기 1차).
     { id: "hooks", label: "Claude 기록 연동" },
-    { id: "codexHooks", label: "Codex 기록 연동" },
+    { id: "codexHooks", label: "GPT 기록 연동" },
     { id: "statusline", label: "사용량 연동" },
   ] },
   data: { title: "데이터", rows: [
@@ -1062,8 +1062,21 @@ export function TamagotchiShell({
   // instead of clicking through 메뉴 by hand.
   initialMode?: Mode;
 }) {
-  const [mode, setMode] = useState<Mode>(initialMode);
-  const [cursor, setCursor] = useState(0);
+  /* 셸이 다른 모니터로 넘어가면 그 창의 컴포넌트가 새로 마운트된다 — 조작하던
+     메뉴가 홈으로 튀었다(대교, 2026-09-11). 화면 상태를 localStorage 에 남기고
+     새 마운트가 **20초 안**이면 이어받는다. 창들은 같은 오리진이라 저장소를 공유한다. */
+  type ShellUi = { mode: Mode; cursor: number; infoPage: number; settingsGroup: string | null; settingsCursor: number; ts: number };
+  const restoredUi = useMemo<ShellUi | null>(() => {
+    try {
+      const raw = localStorage.getItem("toki-shell-ui");
+      if (!raw) return null;
+      const u = JSON.parse(raw) as ShellUi;
+      return Date.now() - u.ts < 20_000 ? u : null;
+    } catch { return null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [mode, setMode] = useState<Mode>(restoredUi?.mode ?? initialMode);
+  const [cursor, setCursor] = useState(restoredUi?.cursor ?? 0);
   const [now, setNow] = useState(new Date());
   // 집중 길이는 **마지막에 맞춘 값**을 기억한다(대교 실기 2차, 2026-09-11) —
   // 매번 25분으로 돌아오면 ＋/－ 를 매번 눌러야 한다. 휴식은 5분 고정.
@@ -1156,7 +1169,7 @@ export function TamagotchiShell({
   // 실력 추세 — 레벨(누적 토큰=소비)과 별개로 "얼마나 늘었나". Rust가 30분마다
   // 백그라운드로 계산해두므로(계산 자체는 11초) 여기선 캐시만 읽는다.
   const [skill, setSkill] = useState<SkillTrend | null>(null);
-  const [infoPage, setInfoPage] = useState(0);
+  const [infoPage, setInfoPage] = useState(restoredUi?.infoPage ?? 0);
   useEffect(() => {
     if (mode !== "info") return;
     invoke<SkillTrend | null>("get_skill_trend").then(setSkill).catch(() => {});
@@ -1387,8 +1400,13 @@ export function TamagotchiShell({
   }, [mode]);
 
   // V4-9: settings-in-CRT (cursor list, ▲▼변경 — same pattern as MENU).
-  const [settingsCursor, setSettingsCursor] = useState(0);
-  const [settingsGroup, setSettingsGroup] = useState<string | null>(null);
+  const [settingsCursor, setSettingsCursor] = useState(restoredUi?.settingsCursor ?? 0);
+  const [settingsGroup, setSettingsGroup] = useState<string | null>(restoredUi?.settingsGroup ?? null);
+  useEffect(() => {
+    try {
+      localStorage.setItem("toki-shell-ui", JSON.stringify({ mode, cursor, infoPage, settingsGroup, settingsCursor, ts: Date.now() }));
+    } catch { /* 저장소가 막혀도 셸은 돌아야 한다 */ }
+  }, [mode, cursor, infoPage, settingsGroup, settingsCursor]);
   const [settingsTopCursor, setSettingsTopCursor] = useState(0);
   const [hook, setHook] = useState<HookStatus | null>(null);
   const [resetArmed, setResetArmed] = useState(false);
@@ -2016,19 +2034,20 @@ export function TamagotchiShell({
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
               {line("누적 소비 · 한 펫 합산", "", true)}
-              {["claude", "codex"].map((a) =>
-                line(a, fmtTok(agentUsage.agents.find((x) => x.label === a)?.tokens ?? 0)),
+              {/* 사용자에게는 "GPT" — codex 는 CLI 이름이라 헷갈린다(실기 보고, 2026-09-11). 키는 그대로. */}
+              {[["claude", "claude"], ["codex", "gpt"]].map(([a, shown]) =>
+                line(shown, fmtTok(agentUsage.agents.find((x) => x.label === a)?.tokens ?? 0)),
               )}
               {/* CLI 유무는 **상태**라 설정이 아니라 여기(대교, 2026-09-11). 없으면
                   온보딩·설정이 아니라 이 줄이 말하고, 설치 명령은 온보딩 1/4 에 있다. */}
               <div style={{ borderTop: "1.5px solid var(--phos-30)", paddingTop: 5 }}>
                 {(hook?.agents ?? []).map((a) =>
-                  line(`${a.id} CLI`, a.cli ? "✓" : <span style={{ color: "var(--rust)" }}>없음</span>),
+                  line(`${a.id === "codex" ? "gpt" : a.id} CLI`, a.cli ? "✓" : <span style={{ color: "var(--rust)" }}>없음</span>),
                 )}
               </div>
               <div style={{ borderTop: "1.5px solid var(--phos-30)", paddingTop: 5 }}>
                 {line(
-                  "codex 파싱",
+                  "gpt 파싱",
                   agentUsage.codex_parse_failed > 0 ? (
                     <span style={{ color: "var(--rust)" }}>
                       실패 {agentUsage.codex_parse_failed}건

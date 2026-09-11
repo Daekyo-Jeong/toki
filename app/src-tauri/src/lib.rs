@@ -337,7 +337,7 @@ struct AgentCli {
 }
 
 fn agent_clis() -> Vec<AgentCli> {
-    [("claude", "Claude Code", "https://claude.com/claude-code"), ("codex", "Codex CLI", "https://developers.openai.com/codex/cli")]
+    [("claude", "Claude Code", "https://claude.com/claude-code"), ("codex", "GPT (Codex CLI)", "https://developers.openai.com/codex/cli")]
         .iter()
         .map(|(id, label, url)| AgentCli {
             id: id.to_string(),
@@ -554,7 +554,7 @@ fn onboarding_status(db: State<'_, Arc<db::Db>>) -> OnboardingStatus {
             };
             let (label, install_url) = match s.id() {
                 agent::AgentId::Claude => ("Claude Code", "https://claude.com/claude-code"),
-                agent::AgentId::Codex => ("Codex CLI", "https://developers.openai.com/codex/cli"),
+                agent::AgentId::Codex => ("GPT (Codex CLI)", "https://developers.openai.com/codex/cli"),
             };
             DetectedAgent {
                 id: s.id().as_str().to_string(),
