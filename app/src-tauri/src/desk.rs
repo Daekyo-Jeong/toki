@@ -80,37 +80,61 @@ pub fn is_desk_label(label: &str) -> bool {
 
 /// 지금 붙어 있는 모니터들 — 창 라벨을 붙여서. 순서는 `available_monitors()`를
 /// 따르되 **주 모니터를 맨 앞**으로 올린다(`main` 창이 거기 붙는다).
-pub fn monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
-    let Ok(list) = app.available_monitors() else { return Vec::new() };
-    let primary_key = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| monitor_key(&m));
-
-    let mut out: Vec<MonitorInfo> = Vec::new();
-    let mut ordered: Vec<&Monitor> = list.iter().collect();
-    ordered.sort_by_key(|m| (Some(monitor_key(m)) != primary_key) as u8);
-
-    // 같은 해상도·배율이 둘 이상이면 좌→우 순으로 꼬리표를 붙여 가른다.
-    let mut dup: std::collections::HashMap<String, Vec<i32>> = Default::default();
-    for m in &list {
-        dup.entry(monitor_key(m)).or_default().push(m.position().x);
+/// 같은 해상도·배율이 둘 이상일 때 키를 가르는 규칙 — **순수 함수**(테스트용).
+/// 입력: (기본 키, x, 주 모니터인가). 출력: (키, 주 모니터인가).
+///
+/// 규칙: 중복이면 x 순서로 `#n` 을 붙이되 **주 모니터는 접미사 없이 기본 키를
+/// 지킨다.** 같은 기종을 하나 더 꽂았을 때 원래 화면의 키가 바뀌면 거기
+/// 붙어 있던 메모·셸이 전부 고아가 된다 — 키는 그 모니터가 남아 있는 한
+/// 안 바뀌어야 한다.
+///
+/// 예전엔 주 모니터 판정도 키 문자열 비교였다. 같은 기종 둘이면 둘 다 `#n`
+/// 이 붙어 주 모니터의 기본 키와 **둘 다** 불일치 → 두 창 모두 primary=false
+/// → 셸이 어느 창에도 안 뜨고 온보딩·씨앗 메모가 양쪽에 뿌려졌다
+/// (Windows 듀얼 모니터 보고, 2026-09-11).
+pub(crate) fn assign_keys(mons: &[(String, i32, bool)]) -> Vec<(String, bool)> {
+    let mut dup: std::collections::HashMap<&str, Vec<i32>> = Default::default();
+    for (base, x, _) in mons {
+        dup.entry(base.as_str()).or_default().push(*x);
     }
     for xs in dup.values_mut() {
         xs.sort_unstable();
     }
+    mons.iter()
+        .map(|(base, x, prim)| {
+            let key = match dup.get(base.as_str()) {
+                Some(xs) if xs.len() > 1 && !*prim => {
+                    let n = xs.iter().position(|v| v == x).unwrap_or(0) + 1;
+                    format!("{base}#{n}")
+                }
+                _ => base.clone(),
+            };
+            (key, *prim)
+        })
+        .collect()
+}
 
-    for (i, m) in ordered.into_iter().enumerate() {
-        let base = monitor_key(m);
-        let key = match dup.get(&base) {
-            Some(xs) if xs.len() > 1 => {
-                let n = xs.iter().position(|x| *x == m.position().x).unwrap_or(0) + 1;
-                format!("{base}#{n}")
-            }
-            _ => base,
-        };
-        let primary = Some(&key) == primary_key.as_ref();
+/// 지금 붙어 있는 모니터들 — 창 라벨을 붙여서. 순서는 `available_monitors()`를
+/// 따르되 **주 모니터를 맨 앞**으로 올린다(`main` 창이 거기 붙는다).
+/// 주 모니터는 **위치·크기**로 알아본다 — 키 문자열은 중복 접미사 때문에 못 믿는다.
+pub fn monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
+    let Ok(list) = app.available_monitors() else { return Vec::new() };
+    let prim = app.primary_monitor().ok().flatten();
+    let is_prim = |m: &Monitor| {
+        prim.as_ref()
+            .map(|p| p.position() == m.position() && p.size() == m.size())
+            .unwrap_or(false)
+    };
+
+    let mut ordered: Vec<&Monitor> = list.iter().collect();
+    ordered.sort_by_key(|m| !is_prim(m) as u8);
+
+    let keyed = assign_keys(
+        &ordered.iter().map(|m| (monitor_key(m), m.position().x, is_prim(m))).collect::<Vec<_>>(),
+    );
+
+    let mut out: Vec<MonitorInfo> = Vec::new();
+    for (i, (m, (key, primary))) in ordered.into_iter().zip(keyed).enumerate() {
         out.push(MonitorInfo {
             window: if i == 0 { PRIMARY_LABEL.to_string() } else { format!("{EXTRA_PREFIX}{i}") },
             name: display_name(m),
@@ -440,6 +464,40 @@ pub fn desk_state_save(app: tauri::AppHandle, window: tauri::Window, json: Strin
     debug_log(&format!("save from={} bytes={}", window.label(), json.len()));
     let _ = app.emit("desk-changed", serde_json::json!({ "from": window.label(), "json": json }));
     Ok(())
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::assign_keys;
+
+    fn keys(v: &[(&str, i32, bool)]) -> Vec<(String, bool)> {
+        assign_keys(&v.iter().map(|(k, x, p)| (k.to_string(), *x, *p)).collect::<Vec<_>>())
+    }
+
+    /// 같은 기종 둘: 주 모니터는 기본 키를 지키고 다른 쪽만 `#n`. 둘 다 primary 판정이 산다.
+    #[test]
+    fn identical_pair_keeps_primary_key_stable() {
+        let k = keys(&[("2560x1440@100", 0, true), ("2560x1440@100", 2560, false)]);
+        assert_eq!(k, vec![("2560x1440@100".into(), true), ("2560x1440@100#2".into(), false)]);
+        // 주 모니터가 오른쪽이어도 기본 키는 주 모니터 것
+        let k = keys(&[("2560x1440@100", 2560, true), ("2560x1440@100", 0, false)]);
+        assert_eq!(k, vec![("2560x1440@100".into(), true), ("2560x1440@100#1".into(), false)]);
+    }
+
+    /// 하나였다가 같은 기종을 더 꽂아도 원래 화면(주)의 키는 그대로다.
+    #[test]
+    fn adding_a_twin_does_not_rename_the_primary() {
+        let before = keys(&[("2560x1440@100", 0, true)]);
+        let after = keys(&[("2560x1440@100", 0, true), ("2560x1440@100", 2560, false)]);
+        assert_eq!(before[0].0, after[0].0);
+    }
+
+    #[test]
+    fn different_models_untouched() {
+        let k = keys(&[("2880x1800@200", 0, true), ("2560x1440@100", 2880, false)]);
+        assert_eq!(k[0].0, "2880x1800@200");
+        assert_eq!(k[1].0, "2560x1440@100");
+    }
 }
 
 #[cfg(test)]

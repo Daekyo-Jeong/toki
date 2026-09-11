@@ -702,10 +702,20 @@ export function MemoDesk({
       clearLegacyDesk();
       // v4에서 넘어온 메모엔 모니터가 없다. **주 모니터 창이 한 번 도장을 찍는다** —
       // 안 찍으면 나중에 주 모니터가 바뀌는 순간 메모가 통째로 다른 화면으로 뛴다.
-      if (mon?.primary && (desk.notes.some((n) => !n.mon) || (desk.shellPos && !desk.shellPos.mon))) {
+      // 1.0.2 는 같은 기종 둘일 때 주 모니터 키에도 `#1` 을 붙였다. 이제 주 모니터는
+      // 접미사 없는 키라, 그때 찍힌 `base#n` 이 지금 안 보이면 **주 창이 거둬 간다**
+      // — 안 그러면 그 메모·셸이 영영 고아다(2026-09-11 판정 수정의 후속).
+      const stale = (k: string | undefined) =>
+        !!k && !knownKeys.has(k) && k.replace(/#\d+$/, "") === monKey;
+      if (
+        mon?.primary &&
+        (desk.notes.some((n) => !n.mon || stale(n.mon)) || (desk.shellPos && (!desk.shellPos.mon || stale(desk.shellPos.mon))))
+      ) {
         setDesk((st) => ({
-          notes: st.notes.map((n) => (n.mon ? n : { ...n, mon: monKey })),
-          shellPos: st.shellPos ? { ...st.shellPos, mon: st.shellPos.mon ?? monKey } : null,
+          notes: st.notes.map((n) => (n.mon && !stale(n.mon) ? n : { ...n, mon: monKey })),
+          shellPos: st.shellPos
+            ? { ...st.shellPos, mon: st.shellPos.mon && !stale(st.shellPos.mon) ? st.shellPos.mon : monKey }
+            : null,
         }));
       }
       return;
@@ -731,7 +741,7 @@ export function MemoDesk({
         items: [{ id: uid(), t: "펫 12종 정리", done: false }, { id: uid(), t: "뽀모 4세션", done: false }] },
     ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deskReady, desk.notes.length, desk.shellPos, monKey]);
+  }, [deskReady, desk.notes.length, desk.shellPos, monKey, knownKeys]);
 
   /* 메모를 다른 화면으로 넘긴다. 좌표는 목적지 화면 기준으로 바뀌므로
      `mon`과 `x/y`를 같이 갈아야 한다 — 하나만 바꾸면 엉뚱한 자리에 나타난다.

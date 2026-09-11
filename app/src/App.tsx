@@ -61,6 +61,12 @@ function App() {
   const [showMigration, setShowMigration] = useState(false);
 
   useEffect(() => {
+    // 온보딩은 **주 창(main)에서만** — 창은 모니터마다 하나라 게이트가 없으면
+    // 모든 모니터에 얼러트가 뜬다(Windows 듀얼 모니터 보고, 2026-09-11).
+    // 프리뷰(브라우저)엔 창이 없으니 그냥 보여준다.
+    let isMain = true;
+    try { isMain = getCurrentWindow().label === "main"; } catch { /* preview */ }
+    if (!isMain) return;
     invoke<OnboardingStatus>("onboarding_status")
       .then((o) => { if (o.needed) setOnboarding(o); })
       .catch(() => {});

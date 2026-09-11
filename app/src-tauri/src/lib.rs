@@ -941,7 +941,8 @@ fn spawn_click_through(app: tauri::AppHandle, rects: ClickRects) {
         // 창이 **보이기 시작한 시각**. "아직 보고 안 한 창은 조작 가능" 규칙에 유예를
         // 두기 위한 것 — 아래 click_through_tick 참고.
         let mut seen: std::collections::HashMap<String, std::time::Instant> = Default::default();
-        let mut last_emit: Option<(f64, f64)> = None;
+        // 창마다 마지막으로 쏜 커서 — 셸은 어느 모니터에나 있을 수 있다.
+        let mut last_emit: std::collections::HashMap<String, (f64, f64)> = Default::default();
         let mut tick: u32 = 0;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(30));
@@ -966,7 +967,7 @@ fn click_through_tick(
     label: &str,
     last_ignore: &mut std::collections::HashMap<String, bool>,
     seen: &mut std::collections::HashMap<String, std::time::Instant>,
-    last_emit: &mut Option<(f64, f64)>,
+    last_emit: &mut std::collections::HashMap<String, (f64, f64)>,
     tick: u32,
 ) {
     /// 보고 없는 창을 조작 가능으로 두는 유예. 셸이 기동 직후 먹통이 되지 않을
@@ -1016,15 +1017,18 @@ fn click_through_tick(
             // pet can track it even over transparent/click-through areas, where
             // the webview receives no pointermove. Throttled + move-gated to
             // keep IPC light (~10/s, only when it actually moved).
-        // 커서 좌표 emit은 **셸이 있는 창에서만** 의미가 있다(펫 시선 추적).
-        // 창마다 쏘면 같은 이벤트가 N배로 날아가 서로를 덮는다.
-        if tick % 3 == 0 && label == desk::PRIMARY_LABEL {
+        // 커서 좌표는 **창마다 자기 좌표로, 자기 창에만** 쏜다(펫 시선 추적).
+        // 예전엔 main 창 기준 좌표를 전역으로 쐈다 — 셸을 다른 모니터로 옮기면
+        // 그 창의 셸이 남의 창 좌표를 받아 시선이 엉뚱한 곳을 봤다
+        // (Windows 듀얼 모니터 보고, 2026-09-11). emit_to 라 서로 덮지 않는다.
+        if tick % 3 == 0 {
             let moved = last_emit
+                .get(label)
                 .map(|(lx, ly)| (cx - lx).abs() > 1.0 || (cy - ly).abs() > 1.0)
                 .unwrap_or(true);
             if moved {
-                let _ = app.emit("cursor-pos", (cx, cy));
-                *last_emit = Some((cx, cy));
+                let _ = app.emit_to(label, "cursor-pos", (cx, cy));
+                last_emit.insert(label.to_string(), (cx, cy));
             }
         }
             let (inside, unreported) = {
