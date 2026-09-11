@@ -15,18 +15,10 @@ Ask the pet to read back your last month and it says things like "this looks lik
 
 ## Install
 
-One line in a terminal.
-
-**macOS** (Terminal)
+One line in a terminal:
 
 ```sh
 curl -fsSL https://toki.dkdk.me/install.sh | bash
-```
-
-**Windows** (PowerShell)
-
-```powershell
-irm https://toki.dkdk.me/install.ps1 | iex
 ```
 
 Prefer to read it first:
@@ -36,7 +28,7 @@ curl -fsSL https://toki.dkdk.me/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
-Or grab the `.dmg` (macOS) / `setup.exe` (Windows) → [releases](https://github.com/Daekyo-Jeong/toki/releases/latest)
+Or grab the `.dmg` and drag it in → [releases](https://github.com/Daekyo-Jeong/toki/releases/latest)
 
 > **Why the terminal is suggested**: macOS attaches a quarantine flag to files
 > downloaded by a browser. Files fetched with `curl` don't get it, so you never
@@ -48,10 +40,9 @@ Or grab the `.dmg` (macOS) / `setup.exe` (Windows) → [releases](https://github
 | | |
 |---|---|
 | macOS | 11 or later · **Apple Silicon** |
-| Windows | 10 or later · x64 · [Git for Windows](https://git-scm.com/downloads/win) for hooks and usage sync (Claude Code runs them through Git Bash) |
 | Agent | [Claude Code](https://claude.com/claude-code) or [Codex CLI](https://developers.openai.com/codex/cli) — both is fine |
 
-Intel Macs aren't supported. The Windows installer isn't code-signed yet, so SmartScreen will warn — choose "More info → Run anyway".
+Intel Macs aren't supported. Windows is in the works — the Windows installer on the releases page is a preview and may have issues.
 
 On first launch it finds which agents you have, reads their history, and levels
 the pet up to match what you've already done.
