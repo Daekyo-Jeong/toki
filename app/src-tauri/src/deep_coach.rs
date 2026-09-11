@@ -128,8 +128,16 @@ fn codex_prompt_from_line(line: &str) -> Option<(DateTime<Utc>, String)> {
         _ => return None,
     };
     let text = text.trim();
-    // 주입된 문맥은 사용자 발화가 아니다.
-    if text.is_empty() || text.starts_with('<') || text.starts_with("# AGENTS.md") || text.contains("<environment_context>") {
+    // 주입된 문맥은 사용자 발화가 아니다. 길이 상한은 **도구가 보낸 프롬프트**를
+    // 거르는 것 — Toki 코칭·다른 자동화가 `codex exec` 로 넣는 수십 KB 문서가
+    // 롤아웃에 role=user 로 남는다(이 맥 실측: 최근 3건이 전부 그것). 사람이
+    // 친 프롬프트는 그 길이가 안 나온다.
+    if text.is_empty()
+        || text.chars().count() > 2000
+        || text.starts_with('<')
+        || text.starts_with("# AGENTS.md")
+        || text.contains("<environment_context>")
+    {
         return None;
     }
     Some((ts, text.to_string()))
@@ -162,6 +170,9 @@ fn read_codex_history(days: i64) -> Vec<HistEntry> {
         }
     }
     let mut out: Vec<HistEntry> = Vec::new();
+    // 이어하기(resume)로 만들어진 롤아웃은 앞 세션의 메시지를 다시 담는다 —
+    // 같은 시각·같은 문장은 한 번만(이 맥 실측: 같은 프롬프트가 두 파일에).
+    let mut seen: std::collections::HashSet<(i64, String)> = Default::default();
     for f in files {
         let Ok(raw) = std::fs::read_to_string(&f) else { continue };
         let mut project = String::from("?");
@@ -186,6 +197,9 @@ fn read_codex_history(days: i64) -> Vec<HistEntry> {
         }
         let picked = if events.is_empty() { items } else { events };
         for (ts, display) in picked {
+            if !seen.insert((ts.timestamp(), display.clone())) {
+                continue;
+            }
             out.push(HistEntry { ts: ts.with_timezone(&Local), project: project.clone(), display });
         }
     }
