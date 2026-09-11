@@ -174,10 +174,7 @@ fn parse_rate_limits(payload: &serde_json::Value) -> Option<UsageWindow> {
 /// 중 임시 폴더로 잠깐 샌다). macOS에서 `/var`는 `/private/var`의 심링크라
 /// 로그에 어느 쪽으로도 찍힐 수 있어 둘 다 거른다.
 fn is_transient_cwd(cwd: &str) -> bool {
-    cwd.starts_with("/tmp")
-        || cwd.starts_with("/private/var/folders")
-        || cwd.starts_with("/var/folders")
-        || cwd.starts_with("/private/tmp")
+    crate::platform::is_transient_cwd(cwd)
 }
 
 /// rollout 스트림에서 세션 문맥을 기억하는 상태. watcher는 소스당 스레드

@@ -11,6 +11,7 @@ mod migrate;
 mod oauth_usage;
 mod pets;
 mod planner;
+mod platform;
 mod retro;
 mod thrash_watch;
 mod tray_sprite;
@@ -72,6 +73,20 @@ pub(crate) fn make_window_transparent(win: &WebviewWindow) {
 /// is an always-on full-screen transparent memo desk (shell + notes float on
 /// it, gaps click through to the desktop), so the old tray-anchor / pinned
 /// popover positioning is obsolete — every show fills the current monitor.
+/// 트레이 글리프. macOS는 검정 템플릿(메뉴바가 밝기에 맞춰 뒤집는다), Windows는
+/// 템플릿 개념이 없어 **흰 글리프**를 그대로 그린다(작업표시줄 기본이 어둡다 —
+/// 밝은 작업표시줄에서의 가독성은 M9 실기 항목). tick.rs의 갱신도 이걸 쓴다.
+pub(crate) fn tray_icon() -> tauri::image::Image<'static> {
+    #[cfg(target_os = "macos")]
+    {
+        tauri::include_image!("icons/tray.png")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        tauri::include_image!("icons/tray-win.png")
+    }
+}
+
 fn show_fullscreen_desk(win: &WebviewWindow) {
     if let Ok(Some(mon)) = win.current_monitor() {
         let _ = win.set_position(*mon.position());
@@ -303,6 +318,9 @@ struct HookStatus {
     /// 조건부 숨김 금지(있으면 항상 보인다).
     codex_available: bool,
     codex_installed: bool,
+    /// M9: 훅·statusLine이 도는 POSIX 셸이 있나. Windows는 Git for Windows가
+    /// 있어야 true — 없으면 Claude Code가 PowerShell로 돌려 우리 한 줄이 죽는다.
+    shell_ok: bool,
 }
 
 #[tauri::command]
@@ -359,7 +377,8 @@ fn hooks_status(db: State<'_, Arc<db::Db>>) -> Result<HookStatus, String> {
     let statusline_installed = statusline_installer::is_installed().unwrap_or(false);
     let codex_available = codex_hook_installer::is_available();
     let codex_installed = codex_hook_installer::is_installed().unwrap_or(false);
-    Ok(HookStatus { installed, port, received_count, statusline_installed, codex_available, codex_installed })
+    let shell_ok = platform::posix_shell_available();
+    Ok(HookStatus { installed, port, received_count, statusline_installed, codex_available, codex_installed, shell_ok })
 }
 
 /// M4: Claude statusLine 인스톨러 — 배터리 1순위 소스를 사용자가 손 안 대고 켠다.
@@ -935,12 +954,19 @@ fn click_through_tick(
             // LOGICAL points first — cursor ÷ primary_scale, window ÷ its own
             // scale — so the difference is window-relative CSS px, matching the
             // rects JS now reports in CSS px (logical, no ×dpr).
+            #[cfg(target_os = "macos")]
             let primary = win
                 .primary_monitor()
                 .ok()
                 .flatten()
                 .map(|m| m.scale_factor())
                 .unwrap_or(sf);
+            // Windows: `cursor_position()`(GetCursorPos)도 `outer_position()`
+            // (GetWindowRect)도 **물리 px**라 같은 창 배율로 나눈다. 위 macOS
+            // 보정은 AppKit이 커서만 주 모니터 배율로 주는 데서 온 것이다.
+            // (M9 실기 검증 항목 — 혼합 DPI 두 모니터에서 확인)
+            #[cfg(not(target_os = "macos"))]
+            let primary = sf;
             let cx = cursor.x / primary - pos.x as f64 / sf;
             let cy = cursor.y / primary - pos.y as f64 / sf;
             // Emit the cursor (window-relative CSS/logical px) ~every 90ms so the
@@ -1023,7 +1049,23 @@ fn open_claude() -> Result<(), String> {
         }
         return Ok(());
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Claude 데스크톱(Squirrel 설치: %LOCALAPPDATA%\AnthropicClaude\claude.exe)
+        // → 없으면 기본 브라우저. 경로는 문서가 아니라 관례라 M9 실기 항목.
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let exe = std::path::PathBuf::from(local).join("AnthropicClaude").join("claude.exe");
+            if exe.exists() && platform::quiet(&mut std::process::Command::new(&exe)).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        platform::quiet(&mut std::process::Command::new("cmd"))
+            .args(["/C", "start", "", "https://claude.ai"])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Err("open_claude: unsupported platform".into())
     }
@@ -1183,7 +1225,8 @@ pub fn run() {
                 // Dedicated menubar glyph (black-on-transparent) rendered as a
                 // macOS template so it inverts with light/dark menubar — the
                 // full-color app icon reads poorly at menubar size.
-                .icon(tauri::include_image!("icons/tray.png"))
+                .icon(tray_icon())
+                // macOS 전용(다른 OS에선 no-op) — Windows는 tray_icon()이 흰 글리프를 준다.
                 .icon_as_template(true)
                 .menu(&menu)
                 .show_menu_on_left_click(false)

@@ -84,7 +84,8 @@ fn feed_thrash_watch(session_key: &str, ev: &agent::Event) {
                     .and_then(|i| i.get("file_path"))
                     .and_then(|x| x.as_str());
                 if let Some(fp) = fp {
-                    let bn = fp.rsplit('/').next().unwrap_or(fp);
+                    // Windows 훅 payload는 `C:\...\x.ts` — 구분자 둘 다 자른다.
+                    let bn = fp.rsplit(['/', '\\']).next().unwrap_or(fp);
                     if !crate::retro::is_living_doc(bn) {
                         tw.note_edit(session_key, bn);
                     }

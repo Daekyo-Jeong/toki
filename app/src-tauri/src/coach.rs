@@ -118,23 +118,7 @@ impl Backend {
 /// `codex` 바이너리 — planner::resolve_claude_bin과 같은 사슬(PATH → 흔한 설치 경로).
 /// Finder에서 띄운 앱은 로그인 셸 PATH를 못 받으므로 2단계가 실제 사용자 대부분을 잡는다.
 pub fn resolve_codex_bin() -> Option<std::path::PathBuf> {
-    if let Ok(out) = std::process::Command::new("which").arg("codex").output() {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() && std::path::Path::new(&p).exists() {
-                return Some(std::path::PathBuf::from(p));
-            }
-        }
-    }
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".local").join("bin").join("codex"));
-        candidates.push(home.join(".npm-global").join("bin").join("codex"));
-    }
-    candidates.push("/opt/homebrew/bin/codex".into());
-    candidates.push("/usr/local/bin/codex".into());
-    candidates.push("/usr/bin/codex".into());
-    candidates.into_iter().find(|p| p.exists())
+    crate::platform::resolve_cli("codex")
 }
 
 fn nonempty_or(s: &str, default: &str) -> String {
@@ -202,6 +186,7 @@ fn codex_exec(prompt: &str, cwd: Option<&std::path::Path>, timeout: Duration) ->
     let _ = std::fs::remove_file(&out_path);
 
     let mut cmd = Command::new(&bin);
+    crate::platform::quiet(&mut cmd);
     cmd.arg("exec")
         .arg("--sandbox")
         .arg("read-only")

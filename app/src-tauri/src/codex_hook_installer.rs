@@ -71,6 +71,24 @@ fn hook_command(port: u16, event: &str) -> String {
     )
 }
 
+/// Windows(M9): codex hooks.json은 `commandWindows`(Windows 전용 오버라이드)를
+/// 지원한다(Codex hooks 문서). 어느 셸로 도는지는 문서가 안 밝혀서 cmd와
+/// PowerShell **둘 다에서 유효한** 꼴로 쓴다 — 큰따옴표, `NUL` 장치, `||` 없음.
+/// `curl.exe`로 박는 이유: PowerShell의 `curl`은 Invoke-WebRequest 별칭이다.
+fn hook_command_windows(port: u16, event: &str) -> String {
+    format!(
+        "curl.exe -sS -m 2 -X POST -H \"Content-Type: application/json\" --data-binary \"@-\" \"http://127.0.0.1:{port}/hook?event={event}&agent=codex\" >NUL 2>&1",
+    )
+}
+
+fn hook_entry(port: u16, event: &str, windows: bool) -> Value {
+    let mut h = json!({ "type": "command", "command": hook_command(port, event), "timeout": 5 });
+    if windows {
+        h["commandWindows"] = json!(hook_command_windows(port, event));
+    }
+    h
+}
+
 fn entry_is_ours(entry: &Value) -> bool {
     entry
         .get("hooks")
@@ -104,9 +122,7 @@ pub fn install_at(p: &Path, port: u16) -> Result<()> {
             .as_array_mut()
             .context("hook entry not an array")?;
         arr.retain(|e| !entry_is_ours(e));
-        arr.push(json!({
-            "hooks": [{ "type": "command", "command": hook_command(port, ev), "timeout": 5 }]
-        }));
+        arr.push(json!({ "hooks": [hook_entry(port, ev, cfg!(windows))] }));
     }
     write_json(p, &doc)
 }
@@ -155,6 +171,26 @@ pub fn is_installed_at(p: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows 항목은 `commandWindows`를 함께 갖고, 그 명령은 cmd·PowerShell
+    /// 어느 쪽에서도 죽지 않는 꼴이어야 한다(POSIX 전용 토큰 금지). macOS 항목엔
+    /// 그 키가 없다 — 남의 hooks.json에 불필요한 키를 넣지 않는다.
+    #[test]
+    fn windows_entry_has_portable_override() {
+        let mac = hook_entry(4321, "Stop", false);
+        assert!(mac.get("commandWindows").is_none());
+        let win = hook_entry(4321, "Stop", true);
+        let cw = win["commandWindows"].as_str().unwrap();
+        assert!(cw.starts_with("curl.exe "), "PowerShell의 curl은 별칭이라 .exe를 박아야 함");
+        assert!(cw.contains("127.0.0.1:4321/hook?event=Stop&agent=codex"));
+        for bad in ["/dev/null", "||", "'", "#"] {
+            assert!(!cw.contains(bad), "cmd/PowerShell 공통이 아닌 토큰: {bad}");
+        }
+        // 식별 태그는 여전히 command 쪽에 있다 — is_ours 판정이 거기를 본다.
+        assert!(win["command"].as_str().unwrap().contains(TOKI_TAG));
+    }
+
+    
 
     fn sandbox(name: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!("toki-cx-test-{}-{}", name, std::process::id()));

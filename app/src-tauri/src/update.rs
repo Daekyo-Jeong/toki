@@ -21,11 +21,14 @@ fn release_repo() -> &'static str {
 }
 
 /// GitHub Releases의 `latest`는 안정 URL이라 버전을 몰라도 받는다.
-/// 릴리스에 올리는 것: `version.txt` · `macos.txt` · `SHA256SUMS` · dmg · install.sh.
+/// 릴리스에 올리는 것: `version.txt` · `macos.txt` · `windows.txt` · `SHA256SUMS`
+/// · dmg · setup.exe · install.sh · install.ps1.
 fn release_base() -> String {
     format!("https://github.com/{}/releases/latest/download", release_repo())
 }
 const APP_NAME: &str = "Toki";
+/// 이 플랫폼의 설치본 파일명을 들고 있는 포인터 파일.
+const POINTER: &str = if cfg!(windows) { "windows.txt" } else { "macos.txt" };
 /// 네트워크가 죽어 있어도 앱이 멈추면 안 된다.
 const NET_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -72,16 +75,21 @@ pub struct UpdateInfo {
 #[tauri::command]
 pub async fn update_check() -> UpdateInfo {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let latest = tauri::async_runtime::spawn_blocking(|| fetch_text("version.txt"))
+    let (latest, pointer) = tauri::async_runtime::spawn_blocking(|| (fetch_text("version.txt"), fetch_text(POINTER)))
         .await
         .ok()
-        .flatten();
-    let available = latest.as_deref().map(|l| is_newer(l, &current)).unwrap_or(false);
+        .unwrap_or((None, None));
+    // **이 플랫폼의 설치본이 릴리스에 있을 때만** 있다고 한다. Windows 판이 아직
+    // 안 올라간 릴리스에서 Windows 앱이 "업데이트 있음"을 띄우면, 누르는 순간
+    // 스크립트가 windows.txt 부재로 실패한다 — 없는 걸 권하지 않는다(M9).
+    let has_build = pointer.as_deref().map(|p| !p.is_empty()).unwrap_or(false);
+    let available = has_build && latest.as_deref().map(|l| is_newer(l, &current)).unwrap_or(false);
     UpdateInfo { current, latest, available }
 }
 
 /// 교체 스크립트. **앱 밖에서 돌아야 한다** — 자기 자신을 덮어쓰는 프로세스는
 /// 중간에 사라진다. 앱이 종료되길 기다렸다가 교체하고 다시 띄운다.
+#[cfg(not(windows))]
 fn spawn_updater() -> Result<(), String> {
     let base = release_base();
     let script = format!(
@@ -137,6 +145,72 @@ log "done"
     std::process::Command::new("/bin/bash")
         .arg("-c")
         .arg(format!("nohup bash '{p}' >/tmp/toki-update.log 2>&1 &"))
+        .spawn()
+        .map_err(|e| format!("업데이터 실행 실패: {e}"))?;
+    Ok(())
+}
+
+/// Windows(M9) 판 — 같은 흐름을 PowerShell로: windows.txt → setup.exe 받기 →
+/// SHA256 검증 → 앱 종료 대기 → NSIS 무음 설치(`/S`) → 재실행. 실패하면
+/// **기존 앱을 다시 띄운다**(bash 판의 `fail`과 같은 규율). 중괄호가 많아
+/// `format!` 대신 자리표시자 치환을 쓴다. ⚠️ 실기 검증 전.
+#[cfg(windows)]
+const UPDATER_PS1: &str = r#"
+$ErrorActionPreference = 'Stop'
+$Base = '__BASE__'
+$Exe  = '__EXE__'
+$AppPid = __PID__
+$Log = Join-Path $env:TEMP 'toki-update.log'
+function Log($m) { "[toki-update] $m" | Out-File -FilePath $Log -Append -Encoding utf8 }
+function Fail($m) { Log $m; try { Start-Process -FilePath $Exe } catch {}; exit 1 }
+try {
+  $File = ([string](Invoke-RestMethod -Uri "$Base/windows.txt" -TimeoutSec 30)).Trim()
+  if (-not $File) { Fail 'windows.txt 비어 있음' }
+  $Tmp = Join-Path $env:TEMP ('toki-update-' + [guid]::NewGuid().ToString('n'))
+  New-Item -ItemType Directory -Path $Tmp | Out-Null
+  $Setup = Join-Path $Tmp $File
+  Log "downloading $File"
+  Invoke-WebRequest -Uri "$Base/$File" -OutFile $Setup -TimeoutSec 600
+  # 체크섬 — 무결성의 유일한 방어선. 없거나 어긋나면 교체하지 않는다.
+  $Sums = [string](Invoke-RestMethod -Uri "$Base/SHA256SUMS" -TimeoutSec 30)
+  $Expected = $null
+  foreach ($line in ($Sums -split "`n")) {
+    $parts = $line.Trim() -split '\s+'
+    if ($parts.Length -ge 2 -and $parts[-1].TrimStart('*') -eq $File) { $Expected = $parts[0]; break }
+  }
+  if (-not $Expected) { Fail "SHA256SUMS 에 $File 없음" }
+  $Actual = (Get-FileHash -Path $Setup -Algorithm SHA256).Hash.ToLower()
+  if ($Expected.ToLower() -ne $Actual) { Fail '체크섬 불일치 — 교체 중단' }
+  Log 'checksum ok'
+  for ($i = 0; $i -lt 50; $i++) {
+    if (-not (Get-Process -Id $AppPid -ErrorAction SilentlyContinue)) { break }
+    Start-Sleep -Milliseconds 200
+  }
+  Stop-Process -Id $AppPid -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 300
+  Log 'running installer'
+  $p = Start-Process -FilePath $Setup -ArgumentList '/S' -Wait -PassThru
+  if ($p.ExitCode -ne 0) { Fail "installer exit $($p.ExitCode)" }
+  Log 'relaunching'
+  Start-Process -FilePath $Exe
+  Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
+  Log 'done'
+} catch { Fail $_.Exception.Message }
+"#;
+
+#[cfg(windows)]
+fn spawn_updater() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("실행 파일 경로 실패: {e}"))?;
+    let script = UPDATER_PS1
+        .replace("__BASE__", &release_base())
+        .replace("__EXE__", &exe.to_string_lossy().replace('\'', "''"))
+        .replace("__PID__", &std::process::id().to_string());
+    let path = std::env::temp_dir().join("toki-self-update.ps1");
+    std::fs::write(&path, script).map_err(|e| format!("스크립트 작성 실패: {e}"))?;
+    let mut cmd = std::process::Command::new("powershell.exe");
+    crate::platform::quiet(&mut cmd);
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+        .arg(&path)
         .spawn()
         .map_err(|e| format!("업데이터 실행 실패: {e}"))?;
     Ok(())

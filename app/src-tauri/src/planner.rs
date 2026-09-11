@@ -39,27 +39,8 @@ static IN_FLIGHT: Mutex<()> = Mutex::new(());
 /// On macOS, Tauri apps launched from Finder do NOT inherit the login
 /// shell's PATH, so step 2 is what actually catches most users.
 pub fn resolve_claude_bin() -> Option<PathBuf> {
-    // 1. `which`
-    if let Ok(out) = Command::new("which").arg("claude").output() {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() && std::path::Path::new(&p).exists() {
-                return Some(PathBuf::from(p));
-            }
-        }
-    }
-
-    // 2. Common install paths.
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".local").join("bin").join("claude"));
-        candidates.push(home.join(".claude").join("local").join("claude"));
-    }
-    candidates.push(PathBuf::from("/opt/homebrew/bin/claude"));
-    candidates.push(PathBuf::from("/usr/local/bin/claude"));
-    candidates.push(PathBuf::from("/usr/bin/claude"));
-
-    candidates.into_iter().find(|p| p.exists())
+    // 사슬(PATH → 흔한 설치 경로)은 platform.rs 한 곳 — Windows는 where/.exe/.cmd.
+    crate::platform::resolve_cli("claude")
 }
 
 /// Whether the planner is currently usable (binary discoverable + no
@@ -126,6 +107,7 @@ pub fn call_with_timeout(
     })?;
 
     let mut cmd = Command::new(&bin);
+    crate::platform::quiet(&mut cmd);
     cmd.arg("-p")
         .arg("--model")
         .arg(model.unwrap_or("haiku"))

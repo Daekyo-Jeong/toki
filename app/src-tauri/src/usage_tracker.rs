@@ -235,6 +235,7 @@ mod window_tests {
 
 fn call_ccusage(bin: &str, prefix_args: &[&str]) -> Option<Vec<u8>> {
     let mut cmd = Command::new(bin);
+    crate::platform::quiet(&mut cmd);
     for a in prefix_args {
         cmd.arg(a);
     }

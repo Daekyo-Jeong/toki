@@ -4,6 +4,12 @@
 #   bash scripts/release.sh                 # 서명만 (빠름, 개발 확인용)
 #   bash scripts/release.sh --notarize      # 서명 + 공증 + staple (정식 배포)
 #   bash scripts/release.sh --no-build      # 이미 빌드된 산출물로 세트만 다시 구성
+#   bash scripts/release.sh --notarize --win # + Windows NSIS 설치본도 한 세트에 (M9)
+#
+# **Windows 는 mac 에서 크로스빌드한다** (cargo-xwin + nsis, reFlex 2026-08-20 방식).
+# 크로스빌드는 컴파일러를 옮긴 것이지 런타임을 옮긴 게 아니다 — exe 는 반드시
+# Windows 실기에서 설치·트레이·투명 데스크·알림까지 확인한 뒤 릴리스에 올린다.
+# 사전 요구: brew install nsis llvm · cargo install cargo-xwin · rustup target add x86_64-pc-windows-msvc
 #
 # 산출물: app/build/latest/ (설치 스크립트가 참조) + app/build/v<버전>/ (보관)
 #
@@ -24,10 +30,13 @@ APP_NAME="Toki"
 
 DO_BUILD=1
 DO_NOTARIZE=0
+DO_WIN=0
+WIN_TARGET="x86_64-pc-windows-msvc"
 for a in "$@"; do
   case "$a" in
     --no-build) DO_BUILD=0 ;;
     --notarize) DO_NOTARIZE=1 ;;
+    --win) DO_WIN=1 ;;
     *) echo "모르는 옵션: $a" >&2; exit 2 ;;
   esac
 done
@@ -71,6 +80,16 @@ fi
 
 if [ "$DO_BUILD" -eq 1 ]; then
   ( cd "$APP_DIR" && npm run tauri build -- --target "$TARGET" --bundles app,dmg )
+fi
+
+# ── Windows (M9) ──────────────────────────────────────────────────────────
+# `--bundles nsis` 명시 필수 — msi(WiX)는 Windows 에서만 만들 수 있다.
+# llvm 의 clang-cl/lld-link 가 PATH 에 있어야 cargo-xwin 이 링크한다.
+if [ "$DO_WIN" -eq 1 ] && [ "$DO_BUILD" -eq 1 ]; then
+  command -v cargo-xwin >/dev/null || { echo "✗ cargo-xwin 없음 — cargo install cargo-xwin" >&2; exit 1; }
+  command -v makensis  >/dev/null || { echo "✗ makensis 없음 — brew install nsis" >&2; exit 1; }
+  export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+  ( cd "$APP_DIR" && npm run tauri build -- --runner cargo-xwin --target "$WIN_TARGET" --bundles nsis )
 fi
 
 OUT="$APP_DIR/src-tauri/target/$TARGET/release/bundle"
@@ -126,8 +145,23 @@ cp "$DMG_PATH" "$BUILD/latest/$DMG_NAME"
 cp "$DMG_PATH" "$BUILD/v$VERSION/$DMG_NAME"
 printf '%s\n' "$VERSION"  > "$BUILD/latest/version.txt"
 printf '%s\n' "$DMG_NAME" > "$BUILD/latest/macos.txt"
-( cd "$BUILD/latest" && shasum -a 256 "$DMG_NAME" > SHA256SUMS )
+if [ "$DO_WIN" -eq 1 ]; then
+  WIN_OUT="$APP_DIR/src-tauri/target/$WIN_TARGET/release/bundle/nsis"
+  WIN_SRC=$(ls "$WIN_OUT/"*-setup.exe 2>/dev/null | head -1 || true)
+  [ -n "$WIN_SRC" ] || { echo "✗ Windows setup.exe 없음 ($WIN_OUT)" >&2; exit 1; }
+  # 파일명은 dmg 와 같은 규칙: 제품-버전-아키텍처.
+  WIN_NAME="Toki-$VERSION-x64-setup.exe"
+  cp "$WIN_SRC" "$BUILD/latest/$WIN_NAME"
+  cp "$WIN_SRC" "$BUILD/v$VERSION/$WIN_NAME"
+  printf '%s\n' "$WIN_NAME" > "$BUILD/latest/windows.txt"
+  cp "$ROOT/scripts/install.ps1" "$BUILD/latest/install.ps1"
+  echo "→ Windows: $WIN_NAME (실기 검증 전이면 릴리스에 올리지 말 것)"
+fi
+# **SHA256SUMS 는 세트가 다 모인 뒤 한 번에** — 한 플랫폼만 새로 넣고 합계를
+# 안 갱신하면 그쪽 업데이터가 체크섬 불일치로 멈춘다(reFlex 2026-08-31 실사고).
+( cd "$BUILD/latest" && shasum -a 256 *.dmg *.exe 2>/dev/null > SHA256SUMS )
 cp "$BUILD/latest/version.txt" "$BUILD/latest/macos.txt" "$BUILD/latest/SHA256SUMS" "$BUILD/v$VERSION/"
+[ -f "$BUILD/latest/windows.txt" ] && cp "$BUILD/latest/windows.txt" "$BUILD/v$VERSION/"
 # 설치 스크립트도 릴리스에 같이 올린다 — curl 한 줄이 이 파일을 받는다.
 cp "$ROOT/scripts/install.sh" "$BUILD/latest/install.sh"
 

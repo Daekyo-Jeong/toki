@@ -16,6 +16,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { useDesk, setDesk, claimsNote, isOrphanNote, type MonitorInfo, type ShellPos } from "./deskStore";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
+
+/** 단축키 표기 — mac은 ⌘, 그 외(Windows)는 Ctrl. 처리 자체는 metaKey||ctrlKey로 둘 다 받는다. */
+const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 import { CassetteShell, TamagotchiShell } from "./TamagotchiShell";
 
 // Borderless transparent windows don't reliably become the key window on
@@ -417,7 +420,7 @@ function MemoCard({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, borderTop: `1px dashed ${c.ink}55`, paddingTop: 6 }}>
           <span style={{ fontFamily: "var(--pixel)", fontSize: 12, color: c.ink, opacity: 0.5 }}>＋</span>
-          <input className="mc-add" value={draft} placeholder="내용 추가 (⌘L 체크박스)"
+          <input className="mc-add" value={draft} placeholder={`내용 추가 (${MOD_KEY}L 체크박스)`}
             onPointerDown={grabKeyFocus}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") addItem(); }} />

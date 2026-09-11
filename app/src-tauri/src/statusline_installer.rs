@@ -79,8 +79,11 @@ fn write_executable(p: &Path, body: &str) -> Result<()> {
     Ok(())
 }
 
+/// Windows(M9): Claude Code가 statusLine을 Git Bash로 돌리므로 `sh` + 슬래시 경로.
+/// `/bin/sh`는 MSYS 마운트라 있긴 하지만, PATH의 `sh`가 더 무난하다.
 fn our_command(script: &Path) -> String {
-    format!("/bin/sh '{}' {}", script.display(), TOKI_TAG)
+    let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
+    format!("{sh} '{}' {}", crate::platform::shell_path(script), TOKI_TAG)
 }
 
 fn is_ours(status_line: &Value) -> bool {
