@@ -172,7 +172,7 @@ fn read_codex_history(days: i64) -> Vec<HistEntry> {
     let mut out: Vec<HistEntry> = Vec::new();
     // 이어하기(resume)로 만들어진 롤아웃은 앞 세션의 메시지를 다시 담는다 —
     // 같은 시각·같은 문장은 한 번만(이 맥 실측: 같은 프롬프트가 두 파일에).
-    let mut seen: std::collections::HashSet<(i64, String)> = Default::default();
+    let mut seen: std::collections::HashSet<(String, String)> = Default::default();
     for f in files {
         let Ok(raw) = std::fs::read_to_string(&f) else { continue };
         let mut project = String::from("?");
@@ -197,7 +197,8 @@ fn read_codex_history(days: i64) -> Vec<HistEntry> {
         }
         let picked = if events.is_empty() { items } else { events };
         for (ts, display) in picked {
-            if !seen.insert((ts.timestamp(), display.clone())) {
+            // 이어하기는 시각까지 다시 찍으므로 **같은 날·같은 문장**으로 본다.
+            if !seen.insert((ts.format("%Y-%m-%d").to_string(), display.clone())) {
                 continue;
             }
             out.push(HistEntry { ts: ts.with_timezone(&Local), project: project.clone(), display });
