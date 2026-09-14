@@ -954,7 +954,7 @@ const SETTINGS_TOP: SettingsRow[] = [
   { id: "notify", label: "알림" },
   { id: "autostart", label: "로그인 시 자동 실행" },
   { id: "g:display", label: "표시" },
-  { id: "g:coach", label: "코칭·회고" },
+  { id: "g:coach", label: "AI" },
   { id: "g:data", label: "데이터" },
 ];
 const SETTINGS_GROUPS: Record<string, { title: string; rows: SettingsRow[] }> = {
@@ -963,7 +963,7 @@ const SETTINGS_GROUPS: Record<string, { title: string; rows: SettingsRow[] }> = 
     { id: "casing", label: "케이스 색상" },
     { id: "invert", label: "화면 반전" },
   ] },
-  coach: { title: "코칭·회고", rows: [
+  coach: { title: "AI", rows: [
     { id: "coachBackend", label: "기본 AI" },
     { id: "memoryPaste", label: "기억 붙여넣기" },
     { id: "promptsReset", label: "코칭 프롬프트" },
@@ -995,7 +995,7 @@ function Pill({ on, fg, bg }: { on: boolean; fg: string; bg: string }) {
 // NOTE: the defrag motion is a decorative INDETERMINATE indicator — the LLM
 // call is one opaque blocking op with no progress signal, so there's no real
 // %. The readout shows real ELAPSED TIME instead of a fake percentage.
-function CoachLoadingScreen({ waking = false, tag, onCancel }: { waking?: boolean; tag?: string; onCancel?: () => void }) {
+function CoachLoadingScreen({ waking = false, tag, onBack, onCancel }: { waking?: boolean; tag?: string; onBack?: () => void; onCancel?: () => void }) {
   const COLS = 14, N = COLS * 8, CELL = 7, GAP = 2;
   const frag = useRef<boolean[] | null>(null);
   if (!frag.current) frag.current = Array.from({ length: N }, () => Math.random() < 0.44);
@@ -1017,11 +1017,12 @@ function CoachLoadingScreen({ waking = false, tag, onCancel }: { waking?: boolea
   // P3-15: cold first run loads the ~8B model into RAM (10-30s). `waking` says so.
   const statusTag = tag ?? (waking ? "코칭 · 준비" : "코칭 · 분석");
   const btn = onCancel ? "분석 중단" : waking ? "깨우는 중" : "분석 중";
-  const line = waking ? "모델 깨우는 중" : "기록 분석 중";
+  // 나가도 된다는 걸 화면이 말한다 — 안 그러면 사람이 붙잡혀 기다린다(대교, 2026-09-14).
+  const line = waking ? "모델 깨우는 중" : onBack ? "끝나면 알려드릴게요" : "기록 분석 중";
   return (
     <Screen
       status={<><span style={{ color: "var(--phos-dim)" }}>{statusTag}</span><span className="pxmono9" style={{ color: "var(--phos-dim)" }}>{elapsed}초</span></>}
-      buttons={[{ label: btn, onClick: onCancel }]}
+      buttons={onBack ? [{ label: "뒤로", onClick: onBack }, { label: btn, onClick: onCancel }] : [{ label: btn, onClick: onCancel }]}
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
         <div style={{ padding: 4, border: "1.5px solid var(--phos-30)", display: "grid", gridTemplateColumns: `repeat(${COLS}, ${CELL}px)`, gridAutoRows: `${CELL}px`, gap: GAP }}>
@@ -1094,7 +1095,10 @@ export function TamagotchiShell({
   const [pomoDone, setPomoDone] = useState(0);
   const pomoTimer = useRef<number | null>(null);
   const [petPreviewIdx, setPetPreviewIdx] = useState(0);
-  const [alert, setAlert] = useState<null | "hunger" | "retro" | "newpet" | "pomo" | "update">(null);
+  const [alert, setAlert] = useState<null | "hunger" | "retro" | "newpet" | "pomo" | "update" | "deepDone" | "retroDone">(null);
+  // 비동기 완료 콜백이 "지금 어느 화면인가"를 알아야 한다 — 클로저의 mode 는 낡는다.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
   /* M8: 새 버전 알림. **데스크 얼러트**로 띄운다(사용자 결정 2026-09-04) —
      셸 안 배지면 셸을 열어야 보이는데, 업데이트는 열지 않아도 닿아야 한다.
      확인은 기동 직후 1회 + 하루 1회. **자동 설치는 없다**(spec §9.4). */
@@ -1317,6 +1321,8 @@ export function TamagotchiShell({
   const [deepError, setDeepError] = useState<string | null>(null);
   const [deepReportOpen, setDeepReportOpen] = useState(false);
   const deepRun = useRef(0);
+  /* 분석은 **기다리지 않는다**(대교, 2026-09-14). '뒤로'로 나가도 계속 돌고, 끝나면
+     알림(OS 토스트 + 셸 팝업)으로 부른다. '분석 중단'만 실제로 죽인다(coaching_cancel). */
   function runDeepCoaching() {
     const myRun = ++deepRun.current;
     setDeepStage("loading");
@@ -1324,14 +1330,21 @@ export function TamagotchiShell({
     invoke<DeepCoaching>("coaching_deep_generate")
       .then((d) => {
         if (deepRun.current !== myRun) return;
-        setDeep(d); setDeepStage("idle"); setDeepReportOpen(true);
+        setDeep(d); setDeepStage("idle");
+        if (modeRef.current === "coaching") setDeepReportOpen(true);
+        else { setAlert("deepDone"); osNotify("코칭이 준비됐어요", "분석이 끝났어요 — 보러 갈까요?", true); }
       })
       .catch((e) => {
         if (deepRun.current !== myRun) return;
         setDeepError(String(e)); setDeepStage("error");
+        if (modeRef.current !== "coaching") { setAlert("deepDone"); osNotify("코칭을 만들지 못했어요", String(e).slice(0, 80), true); }
       });
   }
-  function cancelDeep() { ++deepRun.current; setDeepStage("idle"); }
+  /** 화면만 나간다 — 분석은 계속. */
+  function leaveDeep() { setMode("home"); }
+  /** 진짜 중단 — 자식 프로세스까지. */
+  function abortDeep() { ++deepRun.current; invoke("coaching_cancel").catch(() => {}); setDeepStage("idle"); }
+  function cancelDeep() { setDeepStage("idle"); }
   // 재진입 시 캐시 즉시 로드 (쿼터 0) — 있으면 결과 화면, 없으면 intro.
   // 같이 실행 전 고지(spec §9.2)도 받아둔다. 둘 다 LLM 호출 0.
   const [deepPreview, setDeepPreview] = useState<DeepPreview | null>(null);
@@ -1374,9 +1387,21 @@ export function TamagotchiShell({
         .catch(() => {});
     }, 2000);
     invoke<string>("retro_project_generate", { dir })
-      .then((b) => { if (myRun !== retroRun.current) return; window.clearInterval(poll); setRetroBody(b); setRetroGeneratedAt(new Date().toISOString()); setRetroStage("result"); })
-      .catch((e) => { if (myRun !== retroRun.current) return; window.clearInterval(poll); setRetroError(String(e)); setRetroStage("error"); });
+      .then((b) => {
+        if (myRun !== retroRun.current) return;
+        window.clearInterval(poll); setRetroBody(b); setRetroGeneratedAt(new Date().toISOString()); setRetroStage("result");
+        if (modeRef.current !== "retro") { retroLandOnResult.current = true; setAlert("retroDone"); osNotify("회고가 준비됐어요", "분석이 끝났어요 — 보러 갈까요?", true); }
+      })
+      .catch((e) => {
+        if (myRun !== retroRun.current) return;
+        window.clearInterval(poll); setRetroError(String(e)); setRetroStage("error");
+        if (modeRef.current !== "retro") { retroLandOnResult.current = true; setAlert("retroDone"); }
+      });
   }
+  // 나갔다가 돌아왔을 때 결과(또는 오류)로 바로 앉히는 표식 — 아래 mode effect 가 본다.
+  const retroLandOnResult = useRef(false);
+  const retroStageRef = useRef<CoachStage>("intro");
+  retroStageRef.current = retroStage;
   // Pick a project: show its cached retro instantly if present, else generate.
   function pickProject(dir: string) {
     setRetroPickedDir(dir);
@@ -1389,14 +1414,20 @@ export function TamagotchiShell({
   }
   // Cancel an in-flight analysis → back to the picker. The Rust generate keeps
   // running in the background but its result is dropped (run token stale).
-  const cancelRetro = () => { retroRun.current++; setRetroStage("intro"); };
+  /** 화면만 나간다 — 회고는 계속 돈다. */
+  const leaveRetro = () => setMode("home");
+  /** 진짜 중단. */
+  const cancelRetro = () => { retroRun.current++; invoke("coaching_cancel").catch(() => {}); setRetroStage("intro"); };
   const rerunRetro = () => (retroPickedDir ? runProjectRetro(retroPickedDir) : setRetroStage("intro"));
   useEffect(() => {
     if (mode !== "retro") return;
-    setRetroError(null);
     setRetroCursor(0);
-    setRetroStage("intro");
     invoke<ProjectInfo[]>("retro_project_list").then(setRetroProjects).catch(() => setRetroProjects([]));
+    // 돌고 있거나(나갔다 옴), 방금 끝난 걸 보러 온 거면 그 화면을 지킨다.
+    const st = retroStageRef.current;
+    if (st === "loading" || st === "waking" || retroLandOnResult.current) { retroLandOnResult.current = false; return; }
+    setRetroError(null);
+    setRetroStage("intro");
   }, [mode]);
 
   // V4-9: settings-in-CRT (cursor list, ▲▼변경 — same pattern as MENU).
@@ -1432,7 +1463,8 @@ export function TamagotchiShell({
   const toggleHooks = (install: boolean) => runInstaller(install ? "hooks_install" : "hooks_uninstall");
   function settingsRowRight(id: string): { kind: "pill" | "cycle" | "text"; on?: boolean; text?: string } {
     switch (id) {
-      case "notify": return { kind: "cycle", text: (settings?.notifications_level ?? "impt").toUpperCase() };
+      // on/off 만(대교, 2026-09-14). "all" 로 둔 기존 설정은 켜짐으로 읽는다.
+      case "notify": return { kind: "pill", on: (settings?.notifications_level ?? "impt") !== "off" };
       case "autostart": return { kind: "pill", on: !!settings?.autostart_enabled };
       case "sinceInstall": return { kind: "pill", on: !!settings?.track_since_install };
       // Windows 에 Git for Windows 가 없으면 훅이 아예 못 돈다 — 켜기 전에 말한다.
@@ -1454,9 +1486,7 @@ export function TamagotchiShell({
   }
   function changeSettingsRow(id: string) {
     if (id === "notify") {
-      const order = ["off", "impt", "all"];
-      const i = order.indexOf(settings?.notifications_level ?? "impt");
-      patchSettings({ notifications_level: order[(i + 1) % order.length] });
+      patchSettings({ notifications_level: (settings?.notifications_level ?? "impt") === "off" ? "impt" : "off" });
     } else if (id === "autostart") {
       patchSettings({ autostart_enabled: !settings?.autostart_enabled });
     } else if (id === "sinceInstall") {
@@ -1806,7 +1836,7 @@ export function TamagotchiShell({
   } else if (mode === "coaching" && deepStage === "loading") {
     // V5.1 코칭 = 딥 분석. 모델이 30일 히스토리+기억+인벤토리를 읽으므로
     // 1~3분 걸린다 (실측 57~122s). 태그에 실제 백엔드를 적는다.
-    screen = <CoachLoadingScreen tag={`코칭 · 분석 (${backendLabel(deepPreview?.backend_kind).toLowerCase()})`} onCancel={cancelDeep} />;
+    screen = <CoachLoadingScreen tag={`코칭 · 분석 (${backendLabel(deepPreview?.backend_kind).toLowerCase()})`} onBack={leaveDeep} onCancel={abortDeep} />;
   } else if (mode === "coaching" && deepStage === "error") {
     screen = (
       <Screen
@@ -1815,7 +1845,8 @@ export function TamagotchiShell({
       >
         <div className="pxmono9" style={{ fontSize: 10, lineHeight: "15px", color: "var(--phos)" }}>
           <div style={{ marginBottom: 4 }}>분석을 만들지 못했어요.</div>
-          <div style={{ color: "var(--phos-dim)", overflowWrap: "anywhere" }}>{deepError}</div>
+          {/* 넉 줄까지만 — 그 이상은 CRT 를 덮는다(Windows 실기 401 스택, 2026-09-14). 본문은 Rust 가 한 줄로 줄여 준다. */}
+          <div style={{ color: "var(--phos-dim)", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{deepError}</div>
         </div>
       </Screen>
     );
@@ -1905,7 +1936,7 @@ export function TamagotchiShell({
       </Screen>
     );
   } else if (mode === "retro" && (retroStage === "loading" || retroStage === "waking")) {
-    screen = <CoachLoadingScreen waking={retroStage === "waking"} tag="회고 · 분석" onCancel={cancelRetro} />;
+    screen = <CoachLoadingScreen waking={retroStage === "waking"} tag="회고 · 분석" onBack={leaveRetro} onCancel={cancelRetro} />;
   } else if (mode === "retro" && retroStage === "error") {
     screen = (
       <Screen
@@ -1914,7 +1945,7 @@ export function TamagotchiShell({
       >
         <div className="pxmono9" style={{ fontSize: 10, lineHeight: "15px", color: "var(--phos)" }}>
           <div style={{ marginBottom: 4 }}>회고를 만들지 못했어요.</div>
-          <div style={{ color: "var(--phos-dim)", overflowWrap: "anywhere" }}>{retroError}</div>
+          <div style={{ color: "var(--phos-dim)", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{retroError}</div>
         </div>
       </Screen>
     );
@@ -2150,6 +2181,28 @@ export function TamagotchiShell({
         copyright="©1986 tokisoft"
       >
         {"이번 세션 회고가\n준비됐어요."}
+      </AlertDialog>
+    );
+  } else if (alert === "deepDone") {
+    alertNode = (
+      <AlertDialog
+        title="코칭"
+        ok={deepError ? "확인" : "보기"} onOk={() => { setAlert(null); setMode("coaching"); if (!deepError) setDeepReportOpen(true); }}
+        cancel="나중에" onCancel={() => setAlert(null)}
+        copyright="©1986 tokisoft"
+      >
+        {deepError ? "분석을 만들지 못했어요.\n코칭에서 이유를 볼 수 있어요." : "코칭이 준비됐어요.\n지금 볼까요?"}
+      </AlertDialog>
+    );
+  } else if (alert === "retroDone") {
+    alertNode = (
+      <AlertDialog
+        title="회고"
+        ok={retroError ? "확인" : "보기"} onOk={() => { setAlert(null); setMode("retro"); }}
+        cancel="나중에" onCancel={() => { setAlert(null); retroLandOnResult.current = false; }}
+        copyright="©1986 tokisoft"
+      >
+        {retroError ? "회고를 만들지 못했어요.\n회고에서 이유를 볼 수 있어요." : "회고가 준비됐어요.\n지금 볼까요?"}
       </AlertDialog>
     );
   } else if (alert === "newpet") {

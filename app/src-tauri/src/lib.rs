@@ -735,7 +735,7 @@ async fn retro_project_generate(db: State<'_, Arc<db::Db>>, dir: String) -> Resu
     tauri::async_runtime::spawn_blocking(move || retro::generate_project_retro(&db_clone, &dir))
         .await
         .map_err(|e| format!("join error: {}", e))?
-        .map_err(|e| e.to_string())
+        .map_err(|e| coach::friendly_error(&e.to_string()))
 }
 
 /// P3-15: is the coaching model already warm? The frontend polls this while
@@ -760,7 +760,14 @@ async fn coaching_deep_generate(db: State<'_, Arc<db::Db>>) -> Result<deep_coach
     tauri::async_runtime::spawn_blocking(move || deep_coach::generate_deep(&backend))
         .await
         .map_err(|e| format!("join error: {}", e))?
-        .map_err(|e| e.to_string())
+        .map_err(|e| coach::friendly_error(&e.to_string()))
+}
+
+/// 돌고 있는 분석(코칭·회고)을 실제로 죽인다 — 자식 프로세스까지. 화면만 돌아가고
+/// CLI 는 끝까지 돌던 "중단"은 중단이 아니었다(대교, 2026-09-14).
+#[tauri::command]
+fn coaching_cancel() {
+    coach::request_cancel();
 }
 
 /// 딥 코칭 실행 **전** 고지 (spec §9.2) — 어느 백엔드로 무엇이 나가는지.
@@ -1173,6 +1180,7 @@ pub fn run() {
             read_text_file_utf8,
             prompts_reset,
             coaching_deep_latest,
+            coaching_cancel,
             session_retro_latest,
             retro_project_list,
             retro_project_cached,

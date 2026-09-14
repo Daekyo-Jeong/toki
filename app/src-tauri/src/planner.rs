@@ -106,6 +106,7 @@ pub fn call_with_timeout(
         )
     })?;
 
+    crate::coach::clear_cancel();
     let mut cmd = Command::new(&bin);
     crate::platform::quiet(&mut cmd);
     cmd.arg("-p")
@@ -158,6 +159,11 @@ pub fn call_with_timeout(
                 return Ok(out);
             }
             None => {
+                if crate::coach::cancelled() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(anyhow!("{}", crate::coach::CANCELLED_MSG));
+                }
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();

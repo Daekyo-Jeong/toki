@@ -59,6 +59,14 @@ export function OnboardingAlerts({ status, onDone }: {
   status: OnboardingStatus;
   onDone: () => void;
 }) {
+  /* 상태는 **여기서 다시 읽는다.** CLI 를 설치하고 돌아오면 '다시 확인' 한 번으로
+     앱을 껐다 켤 필요 없이 다음 단계로 간다(대교 실기: "설치 과정이 불편", 2026-09-14). */
+  const [st, setSt] = useState<OnboardingStatus>(status);
+  const [checking, setChecking] = useState(false);
+  const recheck = () => {
+    setChecking(true);
+    invoke<OnboardingStatus>("onboarding_status").then(setSt).catch(() => {}).finally(() => setChecking(false));
+  };
   const [copied, setCopied] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("hello");
   const [installing, setInstalling] = useState(false);
@@ -90,7 +98,7 @@ export function OnboardingAlerts({ status, onDone }: {
     els[next].focus();
   }
 
-  const found = status.agents.filter((a) => a.detected);
+  const found = st.agents.filter((a) => a.detected);
   const totalFiles = found.reduce((n, a) => n + a.log_files, 0);
   const hasClaude = found.some((a) => a.id === "claude");
   const hasCodex = found.some((a) => a.id === "codex");
@@ -174,34 +182,41 @@ export function OnboardingAlerts({ status, onDone }: {
     dialog = (
       <AlertDialog
         title="Toki · 1/4" width={236} copyright="©1986 tokisoft"
-        ok={status.any_agent ? "시작" : "그래도 시작"}
-        onOk={() => setStep(status.any_agent ? "install" : "hatch")}
+        ok={st.any_agent ? "시작" : "그래도 시작"}
+        onOk={() => setStep(st.any_agent ? "install" : "hatch")}
       >
         <div style={{ textAlign: "left", fontSize: 12, lineHeight: "18px" }}>
           <div style={{ marginBottom: 6 }}>안녕하세요, 토키예요.<br />코딩 에이전트를 쓰면 제가 자라요.</div>
-          {status.agents.map((a) => (
+          {/* 한 줄에 다 들어가야 한다 — 236px 팝업에서 "10개 기록 · CLI 없음"이 접혀
+              글자가 튀어나갔다(Windows 실기, 2026-09-14). 이름은 짧게, 오른쪽은 고정폭. */}
+          {st.agents.map((a) => (
             <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, color: a.detected ? "var(--phos)" : "var(--phos-dim)" }}>
-              <span>{a.detected ? "✓" : "·"} {a.label}</span>
-              <span style={{ fontFamily: "var(--pixel-mono-9)", fontSize: 10 }}>
-                {a.detected ? `${a.log_files}개 기록` : "없음"}{a.cli ? "" : " · CLI 없음"}
+              <span style={{ whiteSpace: "nowrap" }}>{a.detected ? "✓" : "·"} {a.id === "codex" ? "GPT" : "Claude"}</span>
+              <span style={{ fontFamily: "var(--pixel-mono-9)", fontSize: 10, whiteSpace: "nowrap" }}>
+                기록 {a.detected ? a.log_files : 0} · CLI {a.cli ? "✓" : "✗"}
               </span>
             </div>
           ))}
-          {/* CLI 가 없는 에이전트는 **설치 명령을 복사**시킨다 — 링크만 주면 문서에서
-              헤맨다(대교 실기 2026-09-11: "설치 안내 필요, 세팅까지"). 설치 뒤
-              다음 화면(2/4)이 훅·사용량 연동까지 이어서 건다. */}
-          {status.agents.some((a) => !a.cli) && (
+          {/* **하나만 있으면 된다.** 예전엔 CLI 가 없는 쪽마다 설치 버튼을 줘서 둘 다
+              깔아야 하는 것처럼 읽혔다(대교 실기, 2026-09-14). 둘 다 없을 때만, 하나를
+              고르라고 말한다. 설치 뒤엔 '다시 확인'이 상태를 새로 읽는다. */}
+          {!st.agents.some((a) => a.cli) && (
             <div style={{ marginTop: 6, color: "var(--phos-dim)", fontSize: 10, lineHeight: "15px", fontFamily: "var(--pixel-9)" }}>
-              {status.any_agent ? "CLI 가 안 보여요. 터미널에 붙여넣어 설치해요." : "둘 다 못 찾았어요. 하나를 설치하고 다시 켜면 그때부터 자라요."}
-              {status.agents.filter((a) => !a.cli).map((a) => (
-                <div key={a.id} style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center" }}>
-                  <button className="cf-soft auto" style={{ fontSize: 10 }}
-                    onClick={() => copyText(a.install_cmd).then((ok) => { if (ok) { setCopied(a.id); window.setTimeout(() => setCopied(null), 2000); } })}>
-                    {copied === a.id ? "복사됨" : `${a.label} 설치 명령 복사`}
-                  </button>
-                  <button className="cf-soft auto" style={{ fontSize: 10 }} onClick={() => openExternal(a.install_url)}>안내</button>
-                </div>
-              ))}
+              둘 중 <span style={{ color: "var(--phos)" }}>하나만</span> 있으면 돼요. 명령을 복사해 터미널에서 설치·로그인한 뒤 '다시 확인'.
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 5 }}>
+                {st.agents.map((a) => (
+                  <div key={a.id} style={{ display: "flex", gap: 4 }}>
+                    <button className="cf-soft" style={{ fontSize: 10, padding: "5px 6px" }}
+                      onClick={() => copyText(a.install_cmd).then((ok) => { if (ok) { setCopied(a.id); window.setTimeout(() => setCopied(null), 2000); } })}>
+                      {copied === a.id ? "복사됨" : `${a.id === "codex" ? "GPT" : "Claude"} 설치 명령 복사`}
+                    </button>
+                    <button className="cf-soft auto" style={{ fontSize: 10, padding: "5px 8px" }} onClick={() => openExternal(a.install_url)}>안내</button>
+                  </div>
+                ))}
+                <button className="cf-soft" style={{ fontSize: 10, padding: "5px 6px" }} onClick={recheck} disabled={checking}>
+                  {checking ? "확인 중…" : "다시 확인"}
+                </button>
+              </div>
             </div>
           )}
         </div>

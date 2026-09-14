@@ -155,6 +155,47 @@ pub fn complete_with_timeout(
 
 const CODEX_TIMEOUT: Duration = Duration::from_secs(180);
 
+/* ── 분석 중단 ───────────────────────────────────────────────────────────
+ * 예전 "분석 중단"은 화면만 돌아가고 자식 프로세스는 끝까지 돌았다(결과를 버릴
+ * 뿐) — 쿼터는 그대로 나갔다(대교 실기, 2026-09-14). 이제 한 플래그를 두고
+ * claude/codex 대기 루프가 100ms 마다 본다. 시작할 때 지우고, 중단 요청이 오면
+ * 자식을 죽이고 `CANCELLED_MSG` 로 끝난다. 분석은 한 번에 하나라 플래그 하나면 된다. */
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub const CANCELLED_MSG: &str = "분석을 중단했어요";
+pub fn request_cancel() { CANCEL.store(true, std::sync::atomic::Ordering::SeqCst); }
+pub(crate) fn clear_cancel() { CANCEL.store(false, std::sync::atomic::Ordering::SeqCst); }
+pub(crate) fn cancelled() -> bool { CANCEL.load(std::sync::atomic::Ordering::SeqCst) }
+
+/// CLI 오류를 **사람 말**로. codex 가 로그인 안 된 채 돌면 stderr 가
+/// `401 Unauthorized … api.openai.com/v1/responses` 를 여섯 줄 쏟아 CRT 를 덮었다
+/// (Windows 실기, 2026-09-14). 아는 모양은 한 줄로 바꾸고, 모르는 건 첫 줄만.
+pub fn friendly_error(raw: &str) -> String {
+    let low = raw.to_ascii_lowercase();
+    if raw.contains(CANCELLED_MSG) { return CANCELLED_MSG.into(); }
+    if low.contains("401") || low.contains("unauthorized") || low.contains("missing bearer") {
+        return "GPT 로그인이 필요해요 — 터미널에서 `codex login` 을 한 번 실행해 주세요".into();
+    }
+    if low.contains("not logged in") || low.contains("please run /login") || low.contains("invalid api key") || low.contains("authentication_error") {
+        return "Claude 로그인이 필요해요 — 터미널에서 `claude` 를 한 번 실행해 로그인해 주세요".into();
+    }
+    if low.contains("timed out") { return "시간이 너무 오래 걸려 멈췄어요 — 잠시 뒤 다시 해 보세요".into(); }
+    if low.contains("not found") && (low.contains("claude") || low.contains("codex")) {
+        return "AI CLI 를 못 찾았어요 — 정보 › 에이전트에서 설치 상태를 확인해 주세요".into();
+    }
+    let first = raw.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("알 수 없는 오류");
+    first.chars().take(140).collect()
+}
+
+/// codex 로그인 여부 — `$CODEX_HOME/auth.json`(기본 `~/.codex/auth.json`).
+/// 없으면 `codex exec` 는 api.openai.com 에 키 없이 나가 401 로 죽는다. 돌리기
+/// 전에 걸러야 쿼터도 시간도 안 쓴다.
+fn codex_logged_in() -> bool {
+    let home = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
+    home.map(|h| h.join("auth.json").exists()).unwrap_or(true)
+}
+
 /// `codex exec` 한 번. 프롬프트는 **stdin**으로 넘긴다(인자로 주면 수백 KB가
 /// argv 한계에 걸린다). 마지막 메시지는 `-o <file>`로 받는다 — stdout엔 진행
 /// 로그가 섞여서 파싱이 불안정하다.
@@ -182,6 +223,10 @@ fn codex_exec(prompt: &str, cwd: Option<&std::path::Path>, timeout: Duration) ->
 
     let bin = resolve_codex_bin()
         .ok_or_else(|| anyhow!("codex CLI를 못 찾았어요 — `npm i -g @openai/codex` 또는 `brew install codex`"))?;
+    if !codex_logged_in() {
+        return Err(anyhow!("GPT 로그인이 필요해요 — 터미널에서 `codex login` 을 한 번 실행해 주세요"));
+    }
+    clear_cancel();
     let out_path = std::env::temp_dir().join(format!("toki-codex-{}.md", std::process::id()));
     let _ = std::fs::remove_file(&out_path);
 
@@ -223,6 +268,12 @@ fn codex_exec(prompt: &str, cwd: Option<&std::path::Path>, timeout: Duration) ->
         match child.try_wait()? {
             Some(st) => break st,
             None => {
+                if cancelled() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file(&out_path);
+                    return Err(anyhow!("{CANCELLED_MSG}"));
+                }
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -345,6 +396,18 @@ pub(crate) fn parse_claude_envelope(raw: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 실기에서 본 401 스택 → 한 줄 로그인 안내. 모르는 오류는 첫 줄만.
+    #[test]
+    fn friendly_error_maps_known_shapes() {
+        let raw = "Reconnecting... 5/5 ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
+        assert!(friendly_error(raw).contains("codex login"));
+        assert!(friendly_error("Not logged in · Please run /login").contains("Claude 로그인"));
+        assert_eq!(friendly_error(CANCELLED_MSG), CANCELLED_MSG);
+        assert!(friendly_error("codex timed out after 180s").contains("오래"));
+        let long = "\n  weird failure line that nobody mapped\nsecond";
+        assert_eq!(friendly_error(long), "weird failure line that nobody mapped");
+    }
 
     #[test]
     fn strip_think_removes_block() {
