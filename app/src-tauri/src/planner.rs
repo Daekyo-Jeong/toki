@@ -113,7 +113,19 @@ pub fn call_with_timeout(
         .arg("--model")
         .arg(model.unwrap_or("haiku"))
         .arg("--output-format")
-        .arg("json");
+        .arg("json")
+        // **사용자의 훅을 안 태운다.** 코칭용 `claude -p` 도 온전한 세션이라
+        // settings.json 의 SessionStart/Stop/SessionEnd 훅이 전부 돈다 — 대교의
+        // "세션 끝나면 기억 저장" 훅이 분석 한 번마다 돌았다(2026-09-14). 그리고
+        // Toki 자신의 훅도 돌아 코칭이 자기 사용량으로 잡혔다. `--setting-sources ""`
+        // 는 설정 파일을 하나도 안 읽어 훅이 0이고, OAuth 는 그대로 산다
+        // (실측: 기본 33줄/훅 다수 → 5줄/훅 0, 응답 정상). `--bare` 는 OAuth 를
+        // 끊어서 못 쓴다(위 주석).
+        .arg("--setting-sources")
+        .arg("")
+        // 세션 파일을 안 남긴다 — 남기면 Toki 의 watcher 가 코칭 트랜스크립트를
+        // 사용자의 작업으로 읽어 XP 를 먹인다(자기 꼬리). `--resume` 목록도 안 더럽힌다.
+        .arg("--no-session-persistence");
 
     if let Some(s) = schema {
         cmd.arg("--json-schema").arg(s);
