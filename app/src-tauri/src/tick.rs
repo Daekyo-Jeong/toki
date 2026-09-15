@@ -334,32 +334,15 @@ fn lv_to_sprite_stage(lv: i32) -> &'static str {
 }
 
 fn update_tray_icon(app: &AppHandle, _save: &CharacterSave, last_key: &mut String) {
-    // Default = fixed Toki brand glyph. §3.3.5 ①: while a live retry streak
-    // is hot (same file re-edited ≥3× with runs in between, watcher-fed) the
-    // tray swaps to D_TRAY_ALERT — 말 없이 상태로만 표현, 개입 0. The alert
-    // decays in thrash_watch (TTL) and the tray follows on the next tick.
+    // 트레이는 **늘 같은 글리프**다. 예전엔 같은 파일을 3번 이상 고쳐 돌리면
+    // 경고 글리프로 바뀌었는데(§3.3.5 ①), 무슨 뜻인지 아무도 몰랐고 도움도 안
+    // 됐다(대교, 2026-09-15) — 뺐다. 반복 수정 추적 자체(thrash_watch)는 펫
+    // 표정과 코칭 통계가 쓰므로 남기고, 이벤트도 그대로 흘린다.
     let alert = crate::thrash_watch::ThrashWatch::global().current_alert();
     let key = if alert.is_some() { "alert" } else { "default" };
     if last_key == key {
         return;
     }
-    let Some(tray) = app.tray_by_id("main-tray") else {
-        return;
-    };
-    let res = match &alert {
-        Some(_) => {
-            let (buf, w, h) = crate::tray_sprite::alert_rgba();
-            tray.set_icon(Some(tauri::image::Image::new_owned(buf, w, h)))
-        }
-        None => tray.set_icon(Some(crate::tray_icon())),
-    };
-    if let Err(e) = res {
-        eprintln!("[tray] set_icon error: {}", e);
-        return;
-    }
-    let _ = tray.set_icon_as_template(true);
-    // Frontend can mirror the pet's expression off the same state; payload is
-    // (file, streak) or null when the alert clears.
     let _ = app.emit("thrash-alert", &alert);
     *last_key = key.into();
 }
