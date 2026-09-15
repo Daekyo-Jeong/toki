@@ -40,8 +40,10 @@ pub fn hooks_path() -> Result<PathBuf> {
 }
 
 /// 이 머신에 codex가 있나 — `~/.codex`가 있으면 있다고 본다(agent.rs의 detect와 같은 기준).
+/// `~/.codex` 가 있거나 **CLI 가 깔려 있으면** 사용 가능. 막 설치해 아직 세션이
+/// 없는 PC 는 폴더가 없어서 온보딩이 GPT 훅을 건너뛰었다(실기, 2026-09-15).
 pub fn is_available() -> bool {
-    codex_dir().map(|d| d.exists()).unwrap_or(false)
+    codex_dir().map(|d| d.exists()).unwrap_or(false) || crate::platform::resolve_cli("codex").is_some()
 }
 
 fn read_json(p: &Path) -> Result<Value> {

@@ -172,13 +172,11 @@ pub fn call_with_timeout(
             }
             None => {
                 if crate::coach::cancelled() {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::platform::kill_tree(&mut child);
                     return Err(anyhow!("{}", crate::coach::CANCELLED_MSG));
                 }
                 if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::platform::kill_tree(&mut child);
                     return Err(anyhow!("claude timed out after {:?}", timeout));
                 }
                 std::thread::sleep(Duration::from_millis(100));

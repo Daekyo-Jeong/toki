@@ -734,11 +734,17 @@ export function MemoDesk({
     }
     const r = stageRef.current?.getBoundingClientRect();
     const w = r?.width ?? 900, h = r?.height ?? 640;
+    // 첫 메모는 **코칭까지 가는 길**이다(대교, 2026-09-15). 예전 "TODAY/이번 주"
+    // 예시는 아무 도움이 안 됐다. 체크 줄(chk)은 실제로 할 두 가지만.
     setNotes([
-      { id: uid(), x: Math.round(Math.max(20, w / 2 - 340)), y: Math.round(Math.max(60, h * 0.30)), rot: -3, color: "manila", z: 6, title: "TODAY",
-        items: [{ id: uid(), t: "토키 밥 주기", done: true }, { id: uid(), t: "리팩터 PR 리뷰", done: false }] },
-      { id: uid(), x: Math.round(Math.min(w - 210, w / 2 + 170)), y: Math.round(Math.max(80, h * 0.4)), rot: 3, color: "mint", z: 6, title: "이번 주",
-        items: [{ id: uid(), t: "펫 12종 정리", done: false }, { id: uid(), t: "뽀모 4세션", done: false }] },
+      { id: uid(), x: Math.round(Math.min(w - 210, w / 2 + 170)), y: Math.round(Math.max(60, h * 0.30)), rot: 2, color: "mint", z: 6, title: "코칭 받기",
+        items: [
+          { id: uid(), t: "AI 모델 설정하기", done: false, chk: false },
+          { id: uid(), t: "메뉴 > 설정 > AI", done: false, chk: true },
+          { id: uid(), t: "-", done: false, chk: false },
+          { id: uid(), t: "토키에게 코칭 받기", done: false, chk: false },
+          { id: uid(), t: "메뉴 > 코칭 > 분석", done: false, chk: true },
+        ] },
     ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deskReady, desk.notes.length, desk.shellPos, monKey, knownKeys]);

@@ -57,16 +57,10 @@ impl Backend {
             BACKEND_CLAUDE => Backend::ClaudeP { model: DEFAULT_CLAUDE_MODEL.to_string() },
             BACKEND_CODEX => Backend::CodexExec,
             BACKEND_OLLAMA => Backend::Ollama { model: nonempty_or(ollama_model, DEFAULT_OLLAMA_MODEL) },
-            _ => match recent_agent {
-                Some("codex") => Backend::CodexExec,
-                Some(_) => Backend::ClaudeP { model: DEFAULT_CLAUDE_MODEL.to_string() },
-                None => {
-                    if crate::planner::resolve_claude_bin().is_none() && resolve_codex_bin().is_some() {
-                        Backend::CodexExec
-                    } else {
-                        Backend::ClaudeP { model: DEFAULT_CLAUDE_MODEL.to_string() }
-                    }
-                }
+            // auto: 최근 활동 에이전트를 따르되 **그 CLI 가 깔려 있을 때만** — 규칙은 platform.rs 한 곳.
+            _ => match crate::platform::default_agent(recent_agent) {
+                "codex" => Backend::CodexExec,
+                _ => Backend::ClaudeP { model: DEFAULT_CLAUDE_MODEL.to_string() },
             },
         }
     }
@@ -269,14 +263,12 @@ fn codex_exec(prompt: &str, cwd: Option<&std::path::Path>, timeout: Duration) ->
             Some(st) => break st,
             None => {
                 if cancelled() {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::platform::kill_tree(&mut child);
                     let _ = std::fs::remove_file(&out_path);
                     return Err(anyhow!("{CANCELLED_MSG}"));
                 }
                 if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::platform::kill_tree(&mut child);
                     let _ = std::fs::remove_file(&out_path);
                     return Err(anyhow!("codex timed out after {:?}", timeout));
                 }

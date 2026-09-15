@@ -832,7 +832,7 @@ function DeepReportModal({ deep, onClose, onRerun }: {
             <div style={{ fontSize: 12, lineHeight: "18px" }}>{renderMarkdown(deep.body)}</div>
             <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
               <button className="cf-soft" style={{ flex: 1 }} onClick={onClose}>닫기</button>
-              <button className="cf-soft" style={{ flex: 1 }} onClick={() => { onClose(); onRerun(); }}>다시 분석 (claude)</button>
+              <button className="cf-soft" style={{ flex: 1 }} onClick={() => { onClose(); onRerun(); }}>다시 분석 ({deep.model.startsWith("codex") ? "gpt" : deep.model.startsWith("ollama") ? "local" : "claude"})</button>
               <button className="cf-soft primary" style={{ flex: 1 }} onClick={doCopy}>{copied ? "복사됨" : "복사"}</button>
             </div>
           </div>
@@ -1820,7 +1820,7 @@ export function TamagotchiShell({
           <span style={{ fontFamily: "var(--pixel-9)", fontSize: 10, color: "var(--phos-dim)" }}>▸</span>
         </div>
         <div style={{ textAlign: "center", fontFamily: "var(--pixel-9)", fontSize: 10, color: "var(--phos)", marginTop: 4 }}>
-          {unlocked ? preview.name : `??? · Lv.${preview.unlockLv}에 해금`}
+          {unlocked ? preview.name : "???"}
         </div>
         {/* V4-14: coaching-voice preview — what this pet sounds like as a coach.
             Fixed 2-line box (descs are normalized to ~40-46 chars = 2 lines);
@@ -1829,7 +1829,7 @@ export function TamagotchiShell({
         <div style={{ textAlign: "center", fontFamily: "var(--pixel-9)", fontSize: 10, lineHeight: "15px", height: 30, overflow: "hidden", color: "var(--phos-dim)", marginTop: 3, padding: "0 6px" }}>
           {unlocked
             ? personas?.[preview.id]?.desc ?? (preview.states ? "스튜디오에서 만든 펫이에요. 코칭은 기본 톤으로 말해요." : "")
-            : ""}
+            : `Lv.${preview.unlockLv}에 해금`}
         </div>
       </Screen>
     );

@@ -510,6 +510,9 @@ struct DetectedAgent {
     /// 경우(다른 계정·PATH 밖 설치)도 있어 `detected` 와 따로 둔다.
     cli: Option<String>,
     install_cmd: String,
+    /// 이 에이전트를 **쓸 수 있다**: 기록이 있거나, CLI 가 있거나, 홈 폴더가 있거나.
+    /// 막 설치한 CLI 는 기록도 폴더도 없어서 `detected` 만 보면 "없음"이 된다.
+    present: bool,
 }
 
 /// v5 M6 — 첫 실행 온보딩에 필요한 것 전부. LLM 호출 없음.
@@ -556,10 +559,14 @@ fn onboarding_status(db: State<'_, Arc<db::Db>>) -> OnboardingStatus {
                 agent::AgentId::Claude => ("Claude Code", "https://claude.com/claude-code"),
                 agent::AgentId::Codex => ("GPT (Codex CLI)", "https://developers.openai.com/codex/cli"),
             };
+            let cli = platform::resolve_cli(s.id().as_str()).map(|p| p.to_string_lossy().to_string());
+            let agent_home = home.join(match s.id() { agent::AgentId::Claude => ".claude", agent::AgentId::Codex => ".codex" });
+            let present = detected || cli.is_some() || agent_home.exists();
             DetectedAgent {
                 id: s.id().as_str().to_string(),
                 label: label.to_string(),
                 detected,
+                present,
                 path: root
                     .map(|p| match p.strip_prefix(&home) {
                         Ok(rest) => format!("~/{}", rest.display()),
@@ -568,7 +575,7 @@ fn onboarding_status(db: State<'_, Arc<db::Db>>) -> OnboardingStatus {
                     .unwrap_or_default(),
                 log_files,
                 install_url: install_url.to_string(),
-                cli: platform::resolve_cli(s.id().as_str()).map(|p| p.to_string_lossy().to_string()),
+                cli,
                 install_cmd: platform::install_cmd(s.id().as_str()).to_string(),
             }
         })
@@ -1104,7 +1111,7 @@ fn open_agent(db: State<'_, Arc<db::Db>>) -> Result<(), String> {
     let s = db.load_settings().unwrap_or_default();
     let agent = match s.coach_backend.as_str() {
         "claude" | "codex" => s.coach_backend.clone(),
-        _ => db.last_active_agent().ok().flatten().unwrap_or_else(|| "claude".into()),
+        _ => platform::default_agent(db.last_active_agent().ok().flatten().as_deref()).to_string(),
     };
     platform::open_agent_app(&agent).map_err(|e| e.to_string())
 }

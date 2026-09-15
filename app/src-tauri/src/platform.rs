@@ -235,6 +235,36 @@ fn windows_start_app_id(names: &[&str]) -> Option<String> {
     names.iter().find_map(|want| rows.iter().find(|(n, _)| n.eq_ignore_ascii_case(want)).map(|(_, id)| id.clone()))
 }
 
+/// "기본 AI"가 auto 일 때 고르는 규칙. `recent`(최근 활동 에이전트)는 **그 CLI 가
+/// 깔려 있을 때만** 따른다 — GPT 만 설치한 PC 에 옛 Claude 기록이 남아 있으면
+/// 코칭·"밥"이 전부 Claude 로 갔다(Windows 실기, 2026-09-15). 없으면 깔린 쪽,
+/// 둘 다 있으면 Claude, 둘 다 없으면 Claude.
+pub fn default_agent(recent: Option<&str>) -> &'static str {
+    let has_claude = resolve_cli("claude").is_some();
+    let has_codex = resolve_cli("codex").is_some();
+    match recent {
+        Some("codex") if has_codex => "codex",
+        Some("claude") if has_claude => "claude",
+        _ => {
+            if !has_claude && has_codex { "codex" } else { "claude" }
+        }
+    }
+}
+
+/// 자식을 **트리째** 죽인다. Windows 에서 npm 이 깐 `codex.cmd` 는 cmd.exe 껍데기라
+/// `child.kill()` 은 껍데기만 죽이고 node 는 계속 돌았다(실기 "분석 중단해도
+/// 프로세스가 안 죽는다", 2026-09-15). `taskkill /T` 가 자식까지 잡는다.
+pub fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        let _ = quiet(&mut Command::new("taskkill"))
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .output();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// 세션 로그의 `cwd`가 임시 폴더인가(프로젝트 귀속에서 제외). macOS는
 /// `/var`↔`/private/var` 심링크 양쪽, Windows는 `%TEMP%`(AppData\Local\Temp).
 pub fn is_transient_cwd(cwd: &str) -> bool {

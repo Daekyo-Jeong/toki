@@ -29,6 +29,8 @@ type DetectedAgent = {
   path: string; log_files: number; install_url: string;
   /** M9: 실행 파일이 보이나 — 기록 폴더만 있고 CLI 가 없는 경우가 있다 */
   cli: string | null; install_cmd: string;
+  /** 기록·CLI·홈 폴더 중 하나라도 있으면 true — 막 설치한 CLI 도 잡는다 */
+  present: boolean;
 };
 
 async function copyText(text: string): Promise<boolean> {
@@ -98,7 +100,7 @@ export function OnboardingAlerts({ status, onDone }: {
     els[next].focus();
   }
 
-  const found = st.agents.filter((a) => a.detected);
+  const found = st.agents.filter((a) => a.present);
   const totalFiles = found.reduce((n, a) => n + a.log_files, 0);
   const hasClaude = found.some((a) => a.id === "claude");
   const hasCodex = found.some((a) => a.id === "codex");
@@ -182,8 +184,10 @@ export function OnboardingAlerts({ status, onDone }: {
     dialog = (
       <AlertDialog
         title="Toki · 1/4" width={236} copyright="©1986 tokisoft"
-        ok={st.any_agent ? "시작" : "그래도 시작"}
-        onOk={() => setStep(st.any_agent ? "install" : "hatch")}
+        ok="시작"
+        // CLI 가 하나도 없으면 시작을 막는다 — 코칭이 안 되는 상태로 들어가지 않게(대교, 2026-09-15).
+        okDisabled={!st.agents.some((a) => a.cli)}
+        onOk={() => setStep(found.length ? "install" : "hatch")}
       >
         <div style={{ textAlign: "left", fontSize: 12, lineHeight: "18px" }}>
           <div style={{ marginBottom: 6 }}>안녕하세요, 토키예요.<br />코딩 에이전트를 쓰면 제가 자라요.</div>
@@ -197,28 +201,38 @@ export function OnboardingAlerts({ status, onDone }: {
               </span>
             </div>
           ))}
-          {/* **하나만 있으면 된다.** 예전엔 CLI 가 없는 쪽마다 설치 버튼을 줘서 둘 다
-              깔아야 하는 것처럼 읽혔다(대교 실기, 2026-09-14). 둘 다 없을 때만, 하나를
-              고르라고 말한다. 설치 뒤엔 '다시 확인'이 상태를 새로 읽는다. */}
-          {!st.agents.some((a) => a.cli) && (
-            <div style={{ marginTop: 6, color: "var(--phos-dim)", fontSize: 10, lineHeight: "15px", fontFamily: "var(--pixel-9)" }}>
-              둘 중 <span style={{ color: "var(--phos)" }}>하나만</span> 있으면 돼요. 명령을 복사해 터미널에서 설치·로그인한 뒤 '다시 확인'.
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 5 }}>
-                {st.agents.map((a) => (
-                  <div key={a.id} style={{ display: "flex", gap: 4 }}>
-                    <button className="cf-soft" style={{ fontSize: 10, padding: "5px 6px" }}
-                      onClick={() => copyText(a.install_cmd).then((ok) => { if (ok) { setCopied(a.id); window.setTimeout(() => setCopied(null), 2000); } })}>
-                      {copied === a.id ? "복사됨" : `${a.id === "codex" ? "GPT" : "Claude"} 설치 명령 복사`}
+          {/* **하나만 있으면 된다.** 안내는 설치 뒤에도 **남는다** — 사라지면 방금 뭘
+              했는지 확인할 길이 없다(대교 실기 2차, 2026-09-15). 하나가 준비되면
+              문구만 바뀌고 나머지 한쪽 버튼은 선택으로 남는다. '시작'은 CLI 가
+              하나라도 생겨야 켜진다. */}
+          {(() => {
+            const ready = st.agents.filter((a) => a.cli);
+            const missing = st.agents.filter((a) => !a.cli);
+            const name = (a: { id: string }) => (a.id === "codex" ? "GPT" : "Claude");
+            return (
+              <div style={{ marginTop: 6, color: "var(--phos-dim)", fontSize: 10, lineHeight: "15px", fontFamily: "var(--pixel-9)" }}>
+                {ready.length === 0
+                  ? <>둘 중 <span style={{ color: "var(--phos)" }}>하나만</span> 있으면 돼요. 명령을 복사해 터미널에서 설치·로그인한 뒤 '다시 확인'.</>
+                  : <><span style={{ color: "var(--phos)" }}>{ready.map(name).join(" · ")} 준비됐어요.</span>{missing.length > 0 && " 다른 쪽도 쓰면 설치해 두세요."}</>}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 5 }}>
+                  {missing.map((a) => (
+                    <div key={a.id} style={{ display: "flex", gap: 4 }}>
+                      <button className="cf-soft" style={{ fontSize: 10, padding: "5px 6px" }}
+                        onClick={() => copyText(a.install_cmd).then((ok) => { if (ok) { setCopied(a.id); window.setTimeout(() => setCopied(null), 2000); } })}>
+                        {copied === a.id ? "복사됨" : `${name(a)} 설치 명령 복사`}
+                      </button>
+                      <button className="cf-soft auto" style={{ fontSize: 10, padding: "5px 8px" }} onClick={() => openExternal(a.install_url)}>안내</button>
+                    </div>
+                  ))}
+                  {missing.length > 0 && (
+                    <button className="cf-soft" style={{ fontSize: 10, padding: "5px 6px" }} onClick={recheck} disabled={checking}>
+                      {checking ? "확인 중…" : "다시 확인"}
                     </button>
-                    <button className="cf-soft auto" style={{ fontSize: 10, padding: "5px 8px" }} onClick={() => openExternal(a.install_url)}>안내</button>
-                  </div>
-                ))}
-                <button className="cf-soft" style={{ fontSize: 10, padding: "5px 6px" }} onClick={recheck} disabled={checking}>
-                  {checking ? "확인 중…" : "다시 확인"}
-                </button>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </AlertDialog>
     );
