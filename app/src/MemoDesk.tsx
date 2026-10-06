@@ -20,7 +20,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 /** 단축키 표기 — mac은 ⌘, 그 외(Windows)는 Ctrl. 처리 자체는 metaKey||ctrlKey로 둘 다 받는다. */
 const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 import { CassetteShell, TamagotchiShell, PET_VARIANTS, detectEyes, type UserPetData } from "./TamagotchiShell";
-import { RoamToki, type RoamPhase } from "./RoamToki";
+import { RoamToki, type RoamPhase, type RoamEntry } from "./RoamToki";
 import type { AppSettings } from "./Settings";
 
 // Borderless transparent windows don't reliably become the key window on
@@ -462,43 +462,6 @@ export function MemoDesk({
 }) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const shellWrapRef = useRef<HTMLDivElement | null>(null);
-
-  /* ── M10 자유 이동 ──
-     설정은 Rust 가 `settings-changed` 로 밀어준다(셸 설정 화면에서 토글). phase:
-     home → leaving(셸 토키 소멸) → out(RoamToki in→roam) → returning(RoamToki out) → home. */
-  const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [userPets, setUserPets] = useState<UserPetData[]>([]);
-  useEffect(() => {
-    invoke<AppSettings>("get_settings").then(setSettings).catch(() => {});
-    invoke<UserPetData[]>("user_pets").then(setUserPets).catch(() => {});
-    const un = listen<AppSettings>("settings-changed", (e) => setSettings(e.payload));
-    return () => { un.then((f) => f()).catch(() => {}); };
-  }, []);
-  const [roamPhase, setRoamPhase] = useState<"home" | "leaving" | "out" | "returning">("home");
-  const [roamSub, setRoamSub] = useState<RoamPhase>("in");
-  const [shellReveal, setShellReveal] = useState(1);
-  const roamRows = useMemo(() => {
-    const u = userPets.find((p) => p.id === settings?.active_character)?.states?.idle?.frames?.[0];
-    return u ?? (PET_VARIANTS.find((v) => v.id === settings?.active_character) ?? PET_VARIANTS[0]).rows;
-  }, [settings?.active_character, userPets]);
-  const roamEyes = useMemo(() => detectEyes(roamRows), [roamRows]);
-  // 셸 토키를 한 픽셀씩 지우고(0.6s) 밖으로 / 밖에서 돌아오면 0.45s 뒤 한 픽셀씩 그린다
-  const tweenReveal = useCallback((to: number, dur: number, done?: () => void) => {
-    const from = to === 1 ? 0 : 1, t0 = performance.now();
-    const f = () => { const k = Math.min(1, (performance.now() - t0) / 1000 / dur); setShellReveal(from + (to - from) * k); if (k < 1) requestAnimationFrame(f); else done?.(); };
-    requestAnimationFrame(f);
-  }, []);
-  const roamWant = !!settings?.free_roam;
-  useEffect(() => {
-    if (roamWant && roamPhase === "home") { setRoamPhase("leaving"); tweenReveal(0, 0.6, () => { setRoamSub("in"); setRoamPhase("out"); }); }
-    if (!roamWant && roamPhase === "out") { setRoamPhase("returning"); setRoamSub("out"); }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roamWant, roamPhase]);
-  const roamOutDone = useCallback(() => { setRoamPhase("home"); setShellReveal(0); window.setTimeout(() => tweenReveal(1, 0.6), 450); }, [tweenReveal]);
-  const roamHome = useCallback(() => { invoke("set_settings", { settings: { ...(settings as AppSettings), free_roam: false } }).catch(() => {}); }, [settings]);
-  const shellRectFn = useCallback(() => shellWrapRef.current?.getBoundingClientRect() ?? null, []);
-  const isAway = roamPhase === "out" || roamPhase === "returning";
-  useEffect(() => { if (roamPhase === "out" && roamSub === "in") { const id = window.setTimeout(() => setRoamSub("roam"), 1200); return () => window.clearTimeout(id); } }, [roamPhase, roamSub]);
   const zTop = useRef(20);
   const draggingRef = useRef(false);
   /* M7: 이 창이 맡은 모니터와, 지금 붙어 있는 모니터 목록.
@@ -647,6 +610,93 @@ export function MemoDesk({
   const hasShell =
     monReady && geomReady &&
     (shellOrphan ? !!mon?.primary : (!monKey || shellMon === monKey));
+
+  /* ── M10 자유 이동 ──
+     설정은 Rust 가 `settings-changed` 로 밀어준다(셸 설정 화면에서 토글). phase:
+     home → leaving(셸 토키 소멸) → out(RoamToki in→roam) → returning(RoamToki out) → home. */
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [userPets, setUserPets] = useState<UserPetData[]>([]);
+  useEffect(() => {
+    invoke<AppSettings>("get_settings").then(setSettings).catch(() => {});
+    invoke<UserPetData[]>("user_pets").then(setUserPets).catch(() => {});
+    const un = listen<AppSettings>("settings-changed", (e) => setSettings(e.payload));
+    return () => { un.then((f) => f()).catch(() => {}); };
+  }, []);
+  const [roamPhase, setRoamPhase] = useState<"home" | "leaving" | "out" | "returning">("home");
+  const [roamSub, setRoamSub] = useState<RoamPhase>("in");
+  /* 토키가 **이 창**에 있나. 셸 창에서 나가지만 옆 모니터로 걸어 넘어가면 그 창이 맡는다
+     (메모 넘기기와 같은 길). 셸은 원래 창에 남는다. */
+  const [roamHere, setRoamHere] = useState(false);
+  const [roamEntry, setRoamEntry] = useState<RoamEntry | null>(null);
+  const [awayPos, setAwayPos] = useState<{ x: number; y: number } | null>(null); // 외출 중 셸 자리(½ 상태 기준 좌상단)
+  const [awayHover, setAwayHover] = useState(false);
+  const monRef = useRef(mon); monRef.current = mon;
+  const monListRef = useRef(monList); monListRef.current = monList;
+  /** 이 변 너머에 모니터가 있나 → 있으면 그 키와 진입 y(그 창 CSS px). 물리 px 로 맞춘다. */
+  const neighbor = useCallback((side: "left" | "right", yCss: number) => {
+    const m = monRef.current; if (!m) return null;
+    const gx = side === "right" ? m.x + m.width + 1 : m.x - 1;
+    const gy = m.y + yCss * m.scale;
+    const t = monListRef.current.find((o) => o.key !== m.key && gx >= o.x && gx < o.x + o.width && gy >= o.y && gy < o.y + o.height);
+    return t ? { key: t.key, y: (gy - t.y) / t.scale } : null;
+  }, []);
+  const canCross = useCallback((side: "left" | "right", y: number) => neighbor(side, y) !== null, [neighbor]);
+  const onCross = useCallback((side: "left" | "right", y: number) => {
+    const t = neighbor(side, y); if (!t) return;
+    setRoamHere(false);
+    emit("toki-roam-cross", { to: t.key, side: side === "left" ? "right" : "left", y: t.y }).catch(() => {});
+  }, [neighbor]);
+  // 넘어온 토키 받기 / 다른 창에서 귀가가 끝났다는 신호
+  useEffect(() => {
+    const a = listen<{ to: string; side: "left" | "right"; y: number }>("toki-roam-cross", (e) => {
+      if (e.payload.to !== monRef.current?.key) return;
+      setRoamEntry({ side: e.payload.side, y: e.payload.y }); setRoamSub("roam"); setRoamHere(true);
+    });
+    const b = listen("toki-roam-home", () => { if (shellWrapRef.current) roamOutDoneRef.current(); });
+    return () => { a.then((f) => f()).catch(() => {}); b.then((f) => f()).catch(() => {}); };
+  }, []);
+  const [shellReveal, setShellReveal] = useState(1);
+  const roamRows = useMemo(() => {
+    const u = userPets.find((p) => p.id === settings?.active_character)?.states?.idle?.frames?.[0];
+    return u ?? (PET_VARIANTS.find((v) => v.id === settings?.active_character) ?? PET_VARIANTS[0]).rows;
+  }, [settings?.active_character, userPets]);
+  const roamEyes = useMemo(() => detectEyes(roamRows), [roamRows]);
+  // 셸 토키를 한 픽셀씩 지우고(0.6s) 밖으로 / 밖에서 돌아오면 0.45s 뒤 한 픽셀씩 그린다
+  const tweenReveal = useCallback((to: number, dur: number, done?: () => void) => {
+    const from = to === 1 ? 0 : 1, t0 = performance.now();
+    const f = () => { const k = Math.min(1, (performance.now() - t0) / 1000 / dur); setShellReveal(from + (to - from) * k); if (k < 1) requestAnimationFrame(f); else done?.(); };
+    requestAnimationFrame(f);
+  }, []);
+  const roamWant = !!settings?.free_roam;
+  useEffect(() => {
+    if (roamWant && roamPhase === "home" && hasShell) { setRoamPhase("leaving"); tweenReveal(0, 0.6, () => { setRoamEntry(null); setRoamSub("in"); setRoamHere(true); setRoamPhase("out"); }); }
+    if (!roamWant && roamPhase === "out") { setRoamPhase("returning"); if (roamHere) setRoamSub("out"); }
+    if (!roamWant && !hasShell && roamHere) setRoamSub("out"); // 셸 없는 창에 토키가 있을 때
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roamWant, roamPhase, roamHere, hasShell]);
+  const roamOutDone = useCallback(() => {
+    setRoamHere(false); setRoamEntry(null);
+    if (shellWrapRef.current) { setRoamPhase("home"); setShellReveal(0); window.setTimeout(() => tweenReveal(1, 0.6), 450); }
+    else emit("toki-roam-home", {}).catch(() => {});   // 셸은 다른 창에 — 거기서 다시 그린다
+  }, [tweenReveal]);
+  const roamOutDoneRef = useRef(roamOutDone); roamOutDoneRef.current = roamOutDone;
+  const roamHome = useCallback(() => { invoke("set_settings", { settings: { ...(settings as AppSettings), free_roam: false } }).catch(() => {}); }, [settings]);
+  const shellRectFn = useCallback(() => shellWrapRef.current?.getBoundingClientRect() ?? null, []);
+  const isAway = roamPhase === "out" || roamPhase === "returning";
+  useEffect(() => { if (roamPhase === "out" && roamSub === "in") { const id = window.setTimeout(() => setRoamSub("roam"), 1200); return () => window.clearTimeout(id); } }, [roamPhase, roamSub]);
+  // 외출 셸 기본 자리: 우상단(½ 크기 기준). 드래그로 옮길 수 있다.
+  useEffect(() => { if (isAway && !awayPos) { const r = shellWrapRef.current?.getBoundingClientRect(); setAwayPos({ x: vp.w - (r ? r.width / 2 : 120) - 18, y: 18 }); } if (!isAway) { setAwayPos(null); setAwayHover(false); } // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAway]);
+  /** 외출 중 셸 드래그 — 안 움직이고 떼면 귀가. 버튼 위는 셸 자신이 처리한다. */
+  const startAwayDrag = (e: React.PointerEvent) => {
+    const wrap = shellWrapRef.current; if (!wrap || !wrap.contains(e.target as Node)) return;
+    if ((e.target as HTMLElement).closest(".cf-soft")) return;
+    e.preventDefault(); onDragState(true);
+    const sx = e.clientX, sy = e.clientY, start = awayPos ?? { x: 0, y: 0 }; let moved = false;
+    const move = (ev: PointerEvent) => { if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 4) moved = true; if (moved) setAwayPos({ x: start.x + ev.clientX - sx, y: start.y + ev.clientY - sy }); };
+    const up = () => { onDragState(false); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); if (!moved) roamHome(); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
   // setNotes와 같은 이유로 정체성을 고정한다.
   const setShellPos = useCallback((upd: ShellPos | null | ((p: ShellPos | null) => ShellPos | null)) => {
     setDesk((st) => {
@@ -896,12 +946,22 @@ export function MemoDesk({
     const rect = shellWrapRef.current!.getBoundingClientRect();
     const ox = e.clientX - rect.left;
     const oy = e.clientY - rect.top;
+    // M10 롱프레스: 3초 동안 안 움직이고 누르고 있으면 토키가 밖으로 나간다(대교, 2026-10-06).
+    const px0 = e.clientX, py0 = e.clientY;
+    let pressTimer: number | null = window.setTimeout(() => {
+      pressTimer = null;
+      onDragState(false); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); endGhost(dragId);
+      setShellGone(false);
+      if (settings && !settings.free_roam) invoke("set_settings", { settings: { ...settings, free_roam: true } }).catch(() => {});
+    }, 3000);
+    const cancelPress = () => { if (pressTimer !== null) { window.clearTimeout(pressTimer); pressTimer = null; } };
     const gw = Math.round(rect.width), gh = Math.round(rect.height);
     // 셸도 같은 규칙 — 창 밖으로 나가면 목적지 화면에 자리 표시가 따라다니고,
     // 놓으면 그 화면으로 넘어간다.
     let lastGhost = 0;
     const dragId = newDragId();
     const move = (ev: PointerEvent) => {
+      if (pressTimer !== null && Math.hypot(ev.clientX - px0, ev.clientY - py0) > 4) cancelPress();
       const nx = Math.round(Math.max(-40, Math.min(window.innerWidth - 60, ev.clientX - ox)));
       const ny = Math.round(Math.max(-10, Math.min(window.innerHeight - 40, ev.clientY - oy)));
       setShellPos({ fx: nx / (window.innerWidth || 1), fy: ny / (window.innerHeight || 1), mon: monKey ?? undefined });
@@ -927,6 +987,7 @@ export function MemoDesk({
         .catch(() => {});
     };
     const up = (ev: PointerEvent) => {
+      cancelPress();
       onDragState(false);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -999,11 +1060,13 @@ export function MemoDesk({
           M7: 셸은 **하나뿐**이라 소유 모니터의 창에서만 그린다. */}
       {hasShell && (
       <div className="shell-wrap"
-        onPointerDown={isAway ? undefined : startShellDrag}
+        onPointerDown={isAway ? startAwayDrag : startShellDrag}
+        onPointerEnter={isAway ? () => setAwayHover(true) : undefined}
+        onPointerLeave={isAway ? () => setAwayHover(false) : undefined}
         style={isAway
-          // M10 외출 중: 디자인 그대로 ½ 로 우상단. 누르면 귀가(셸 안 '돌아오기'도 같다).
-          ? { position: "absolute", right: 18, top: 18, transform: "scale(.5)", transformOrigin: "top right",
-              cursor: "pointer", opacity: shellGone ? 0 : 1, transition: "transform .5s cubic-bezier(.2,.9,.25,1)" }
+          // M10 외출 중: 디자인 그대로 ½. 호버하면 원래 크기로 돌아와 그대로 쓴다. 드래그로 옮기고, 안 움직이고 떼면 귀가.
+          ? { position: "absolute", left: awayPos?.x ?? vp.w - 138, top: awayPos?.y ?? 18, transform: awayHover ? "scale(1)" : "scale(.5)", transformOrigin: "top right",
+              cursor: "grab", opacity: shellGone ? 0 : 1, transition: "transform .25s cubic-bezier(.2,.9,.25,1)" }
           : shellPos && !shellOrphan
           ? { position: "absolute", left: Math.round(shellPos.fx * vp.w), top: Math.round(shellPos.fy * vp.h),
               cursor: "grab", opacity: shellGone ? 0 : 1 }
@@ -1022,8 +1085,9 @@ export function MemoDesk({
         </div>
       </div>
       )}
-      {hasShell && isAway && (
-        <RoamToki rows={roamRows} eyes={roamEyes} phase={roamSub} shellRect={shellRectFn}
+      {roamHere && (
+        <RoamToki rows={roamRows} eyes={roamEyes} phase={roamSub} entry={roamEntry} shellRect={shellRectFn}
+          canCross={canCross} onCross={onCross}
           onOutDone={roamOutDone} onHome={roamHome}
           onFeed={() => invoke("open_agent").catch(() => {})}
           onFocus={() => window.dispatchEvent(new CustomEvent("toki-shell-mode", { detail: "pomo" }))}

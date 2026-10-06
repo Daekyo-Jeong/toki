@@ -1274,6 +1274,9 @@ export function TamagotchiShell({
   const [settings, setSettingsState] = useState<AppSettings | null>(null);
   useEffect(() => {
     invoke<AppSettings>("get_settings").then(setSettingsState).catch(() => {});
+    // 다른 곳(데스크의 귀가·롱프레스)이 바꾼 설정도 여기 토글에 비친다(M10).
+    const un = listen<AppSettings>("settings-changed", (e) => setSettingsState(e.payload));
+    return () => { un.then((f) => f()).catch(() => {}); };
   }, []);
 
   // P1-1: surface the authoritative 5h usage (V4-4) that was previously

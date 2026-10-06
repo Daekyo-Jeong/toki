@@ -60,9 +60,15 @@ function drawSprite(cv: HTMLCanvasElement, rows: string[], eyes: [number, number
   }
 }
 
-export function RoamToki({ rows, eyes, phase, shellRect, onOutDone, onHome, onFeed, onFocus, onMenu }: {
+export type RoamEntry = { side: "left" | "right"; y: number };
+export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCross, onOutDone, onHome, onFeed, onFocus, onMenu }: {
   rows: string[]; eyes: [number, number][];
   phase: RoamPhase;
+  /** 옆 모니터에서 넘어온 경우의 진입 변(side)과 y(이 창 CSS px). */
+  entry?: RoamEntry | null;
+  /** 이 변에 옆 모니터가 있나 — 있으면 벽을 타지 않고 넘어간다. */
+  canCross: (side: "left" | "right", y: number) => boolean;
+  onCross: (side: "left" | "right", y: number) => void;
   /** 셸의 현재 사각형(데스크 창 CSS px). 발판·귀가 판정에 쓴다. */
   shellRect: () => DOMRect | null;
   onOutDone: () => void;
@@ -113,13 +119,21 @@ export function RoamToki({ rows, eyes, phase, shellRect, onOutDone, onHome, onFe
   const speak = useCallback((m: string, ms = 1500) => { setSay(m); window.setTimeout(() => setSay((s) => (s === m ? null : s)), ms); }, []);
 
   /* ── 의도 ── Shimeji 식: 걷기·앉기·보기·벽·천장·창 위 */
+  const canCrossRef = useRef(canCross); canCrossRef.current = canCross;
+  const onCrossRef = useRef(onCross); onCrossRef.current = onCross;
   const pick = useCallback((force?: string) => {
     const r = force ?? ["walk", "walk", "walk", "sit", "climb", "window", "ceiling", "look"][Math.floor(rnd(0, 8))];
     T.mode = "idle"; T.until = now() + rnd(1.2, 3.5); T.goal = null; T.goalCeil = false;
     if (r === "walk") { T.mode = "walk"; T.dir = Math.random() < .5 ? -1 : 1; T.until = now() + rnd(1.5, 4); }
     else if (r === "sit") { T.mode = "sit"; T.until = now() + rnd(2.5, 5); }
     else if (r === "look") { T.mode = "look"; T.until = now() + rnd(2, 4); }
-    else if (r === "climb" || r === "ceiling") { T.mode = "walk"; T.goal = T.x < W() / 2 ? "wallL" : "wallR"; T.dir = T.goal === "wallL" ? -1 : 1; T.goalCeil = r === "ceiling"; T.until = now() + 30; }
+    else if (r === "climb" || r === "ceiling") {
+      // 벽은 옆에 모니터가 **없는** 변만 — 있는 쪽은 벽이 아니라 문이다.
+      const sides = (["wallL", "wallR"] as const).filter((w) => !canCrossRef.current(w === "wallL" ? "left" : "right", T.y));
+      if (!sides.length) { pick("walk"); return; }
+      T.goal = sides.length === 2 ? (T.x < W() / 2 ? "wallL" : "wallR") : sides[0];
+      T.mode = "walk"; T.dir = T.goal === "wallL" ? -1 : 1; T.goalCeil = r === "ceiling"; T.until = now() + 30;
+    }
     else if (r === "window") {
       const ps = plats.current.filter((p) => p.y < T.y - 40); if (!ps.length) { pick("walk"); return; }
       const p = ps[Math.floor(rnd(0, ps.length))]; const tx = Math.min(Math.max(p.x0 + 40, T.x), p.x1 - 40);
@@ -146,6 +160,9 @@ export function RoamToki({ rows, eyes, phase, shellRect, onOutDone, onHome, onFe
         else if (T.goal === "wallR" && T.x >= W() - S / 2 - 2) { T.x = W() - S / 2 - 2; T.surface = "wallR"; T.mode = "climb"; T.until = now() + rnd(2, 4); T.goal = null; }
         else if (T.goal && typeof T.goal === "object" && Math.abs(T.x - T.goal.tx) < 4) { const g = T.goal; T.goal = null; jumpTo(g.tx, g.plat.y); }
         if (T.surface === "plat" && T.plat) { const p = T.plat; if (!plats.current.includes(p) || T.x < p.x0 + 8 || T.x > p.x1 - 8) { T.surface = "air"; T.vx = T.dir * 60; T.vy = 0; } }
+        // 화면 끝: 옆 모니터가 있으면 넘어간다(메모와 같은 길), 없으면 돌아선다
+        if (T.x <= S / 2 && T.dir < 0 && canCrossRef.current("left", T.y)) { T.mode = "idle"; onCrossRef.current("left", T.y); return; }
+        if (T.x >= W() - S / 2 && T.dir > 0 && canCrossRef.current("right", T.y)) { T.mode = "idle"; onCrossRef.current("right", T.y); return; }
         if (T.x <= S / 2 || T.x >= W() - S / 2) T.dir = (T.dir * -1) as 1 | -1;
       } else if (T.surface === "plat" && T.plat && !plats.current.includes(T.plat)) { T.surface = "air"; T.vx = 0; T.vy = 0; } // 창이 닫혔다
       if (now() > T.until && !T.goal) pick();
@@ -214,6 +231,14 @@ export function RoamToki({ rows, eyes, phase, shellRect, onOutDone, onHome, onFe
   const phaseRef = useRef(phase); phaseRef.current = phase;
   const outDoneRef = useRef(onOutDone); outDoneRef.current = onOutDone;
   useEffect(() => {
+    if (entry && phase === "roam") {
+      T.reveal = 1; T.padReveal = 1; T.drag = false; T.goal = null; T.goalCeil = false;
+      T.x = entry.side === "left" ? S / 2 + 1 : W() - S / 2 - 1; T.dir = entry.side === "left" ? 1 : -1;
+      // 바닥 높이에 가까우면 바닥, 아니면 공중(발판이 있으면 거기 착지, 없으면 낙하)
+      if (entry.y >= H() - 4) { T.y = H(); T.surface = "floor"; } else { T.y = entry.y; T.surface = "air"; T.vx = T.dir * 60; T.vy = 0; }
+      T.mode = "walk"; T.until = now() + rnd(1.5, 4);
+      return;
+    }
     if (phase === "in") {
       // 셸 아래 바닥에서 시작 — 바탕 → 토키 순으로 한 픽셀씩
       const sr = shellRect(); T.x = Math.min(W() - 80, Math.max(80, sr ? sr.left + sr.width / 2 : W() / 2)); T.y = H();
