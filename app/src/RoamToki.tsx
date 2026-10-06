@@ -60,8 +60,9 @@ function drawSprite(cv: HTMLCanvasElement, rows: string[], eyes: [number, number
   }
 }
 
-export type RoamEntry = { side: "left" | "right"; y: number };
-export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCross, onOutDone, onHome, onFeed, onFocus, onMenu }: {
+/** 걸어서 넘어오면 side+y, 드래그로 떨어뜨리면 x+y(그 창 CSS px). */
+export type RoamEntry = { side?: "left" | "right"; x?: number; y: number };
+export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCross, onDragState, onDropOutside, onOutDone, onHome, onFeed, onFocus, onMenu }: {
   rows: string[]; eyes: [number, number][];
   phase: RoamPhase;
   /** 옆 모니터에서 넘어온 경우의 진입 변(side)과 y(이 창 CSS px). */
@@ -69,6 +70,10 @@ export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCros
   /** 이 변에 옆 모니터가 있나 — 있으면 벽을 타지 않고 넘어간다. */
   canCross: (side: "left" | "right", y: number) => boolean;
   onCross: (side: "left" | "right", y: number) => void;
+  /** 드래그 중엔 데스크가 창 전체를 조작 가능으로 묶어야 커서가 창 밖으로 나가도 드래그가 산다. */
+  onDragState: (dragging: boolean) => void;
+  /** 창 밖(옆 모니터)에 떨어뜨렸다 — 데스크가 어느 모니터인지 알아내 넘긴다. */
+  onDropOutside: (clientX: number, clientY: number) => void;
   /** 셸의 현재 사각형(데스크 창 CSS px). 발판·귀가 판정에 쓴다. */
   shellRect: () => DOMRect | null;
   onOutDone: () => void;
@@ -233,6 +238,9 @@ export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCros
   useEffect(() => {
     if (entry && phase === "roam") {
       T.reveal = 1; T.padReveal = 1; T.drag = false; T.goal = null; T.goalCeil = false;
+      if (entry.x !== undefined) { // 드래그로 떨어뜨림 — 그 자리에서 낙하
+        T.x = Math.max(S / 2, Math.min(W() - S / 2, entry.x)); T.y = entry.y + S / 2; T.surface = "air"; T.vx = 0; T.vy = 0; T.mode = "idle"; return;
+      }
       T.x = entry.side === "left" ? S / 2 + 1 : W() - S / 2 - 1; T.dir = entry.side === "left" ? 1 : -1;
       // 바닥 높이에 가까우면 바닥, 아니면 공중(발판이 있으면 거기 착지, 없으면 낙하)
       if (entry.y >= H() - 4) { T.y = H(); T.surface = "floor"; } else { T.y = entry.y; T.surface = "air"; T.vx = T.dir * 60; T.vy = 0; }
@@ -275,13 +283,15 @@ export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCros
   const down = useRef<{ x: number; y: number } | null>(null);
   const onDown = (e: React.PointerEvent) => { down.current = { x: e.clientX, y: e.clientY }; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); };
   const onMove = (e: React.PointerEvent) => {
-    if (down.current && !T.drag && Math.hypot(e.clientX - down.current.x, e.clientY - down.current.y) > 6) { T.drag = true; T.surface = "air"; T.mode = "idle"; setBubble(false); }
+    if (down.current && !T.drag && Math.hypot(e.clientX - down.current.x, e.clientY - down.current.y) > 6) { T.drag = true; T.surface = "air"; T.mode = "idle"; setBubble(false); onDragState(true); }
     if (T.drag) { T.x = e.clientX; T.y = e.clientY + S / 2; }
     cursor.current = { x: e.clientX, y: e.clientY };
   };
   const onUp = (e: React.PointerEvent) => {
     if (T.drag) {
-      T.drag = false;
+      T.drag = false; onDragState(false);
+      const out = e.clientX < -8 || e.clientY < -8 || e.clientX > window.innerWidth + 8 || e.clientY > window.innerHeight + 8;
+      if (out) { onDropOutside(e.clientX, e.clientY); return; }
       const r = shellRect();
       if (r && e.clientX > r.left && e.clientX < r.right && e.clientY > r.top && e.clientY < r.bottom) { onHome(); return; } // 셸 위에 놓으면 귀가
       T.surface = "air"; T.vx = 0; T.vy = 0;
