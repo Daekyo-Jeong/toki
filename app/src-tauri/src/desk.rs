@@ -527,3 +527,89 @@ mod tests {
         assert!(!is_desk_label(""));
     }
 }
+
+
+/* ─── M10 자유 이동: 토키가 올라설 발판 = 보이는 창들 ─────────────────────
+ *
+ * 창 사각형을 **이 데스크 창 기준 CSS px** 로 돌려준다 — 프런트는 좌표계 변환을
+ * 모른다. 자기 창(Toki)·시스템 UI·너무 작은 것은 뺀다. 2초 폴링이라 비용은 작다. */
+#[derive(Debug, Clone, Serialize)]
+pub struct WinRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+#[tauri::command]
+pub fn desk_windows(window: tauri::Window) -> Vec<WinRect> {
+    let sf = window.scale_factor().unwrap_or(1.0);
+    let pos = window.outer_position().map(|p| (p.x as f64 / sf, p.y as f64 / sf)).unwrap_or((0.0, 0.0));
+    let size = window.inner_size().map(|s| (s.width as f64 / sf, s.height as f64 / sf)).unwrap_or((0.0, 0.0));
+    let mut out: Vec<WinRect> = Vec::new();
+    for (x, y, w, h) in os_windows(sf) {
+        // 이 데스크 창 좌표로 — 밖에 있는 창은 버린다
+        let rx = x - pos.0;
+        let ry = y - pos.1;
+        if w < 80.0 || h < 40.0 { continue; }
+        if rx + w < 0.0 || ry + h < 0.0 || rx > size.0 || ry > size.1 { continue; }
+        out.push(WinRect { x: rx, y: ry, w, h });
+    }
+    out
+}
+
+/// OS 별 창 목록 — 전역 **논리(CSS) px**, 좌상단 원점, 앞에 있는 것부터.
+#[cfg(target_os = "macos")]
+fn os_windows(_sf: f64) -> Vec<(f64, f64, f64, f64)> {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use core_graphics::window::{copy_window_info, kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly};
+    let me = std::process::id() as i64;
+    let Some(arr): Option<CFArray> = copy_window_info(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID) else { return Vec::new() };
+    let mut out = Vec::new();
+    for i in 0..arr.len() {
+        let Some(item) = arr.get(i) else { continue };
+        let dict: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(*item as _) };
+        let num = |k: &str| -> Option<f64> { dict.find(CFString::new(k)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_f64()) };
+        if num("kCGWindowLayer").unwrap_or(1.0) != 0.0 { continue; }            // 메뉴바·독·알림은 레이어 ≠ 0
+        if num("kCGWindowOwnerPID").map(|p| p as i64) == Some(me) { continue; } // 우리 데스크 창
+        if num("kCGWindowAlpha").unwrap_or(1.0) < 0.5 { continue; }
+        // 바운즈는 CFDictionary — 제네릭 사전은 downcast 가 안 되니 CFType 으로 받아 다시 감싼다
+        let Some(bv) = dict.find(CFString::new("kCGWindowBounds")) else { continue };
+        let b: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(bv.as_CFTypeRef() as _) };
+        let g = |k: &str| b.find(CFString::new(k)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_f64()).unwrap_or(0.0);
+        out.push((g("X"), g("Y"), g("Width"), g("Height")));
+    }
+    out
+}
+
+#[cfg(windows)]
+fn os_windows(sf: f64) -> Vec<(f64, f64, f64, f64)> {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible};
+    struct Acc { me: u32, sf: f64, out: Vec<(f64, f64, f64, f64)> }
+    unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let acc = &mut *(lp as *mut Acc);
+        if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 || GetWindowTextLengthW(hwnd) == 0 { return 1; }
+        let mut pid = 0u32; GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == acc.me { return 1; }
+        let mut cloaked = 0u32;
+        if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32, &mut cloaked as *mut _ as _, 4) == 0 && cloaked != 0 { return 1; } // 가상 데스크톱 뒤
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS as u32, &mut r as *mut _ as _, std::mem::size_of::<RECT>() as u32) != 0 { return 1; }
+        let s = acc.sf;
+        acc.out.push((r.left as f64 / s, r.top as f64 / s, (r.right - r.left) as f64 / s, (r.bottom - r.top) as f64 / s));
+        1
+    }
+    let mut acc = Acc { me: unsafe { GetCurrentProcessId() }, sf, out: Vec::new() };
+    unsafe { EnumWindows(Some(cb), &mut acc as *mut Acc as LPARAM); }
+    acc.out
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn os_windows(_sf: f64) -> Vec<(f64, f64, f64, f64)> { Vec::new() }

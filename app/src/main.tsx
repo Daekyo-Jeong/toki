@@ -55,7 +55,7 @@ if (import.meta.env.DEV && params.has("shell")) {
     notifications_level: "impt", autostart_enabled: false, track_since_install: false,
     install_baseline_cache_read: 0, active_character: "bunny",
     case_color: params.get("case") || "beige", invert_screen: params.get("invert") === "1",
-    coach_backend: "auto", coach_ollama_model: "exaone3.5:7.8b", always_on_top: true,
+    coach_backend: "auto", coach_ollama_model: "exaone3.5:7.8b", always_on_top: true, free_roam: false,
   };
   const mockHook = { installed: true, port: 6996, received_count: 789,
     statusline_installed: true, codex_available: true, codex_installed: false };

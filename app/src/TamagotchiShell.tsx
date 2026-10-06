@@ -22,6 +22,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppSettings } from "./Settings";
 import { casingVars, CASES, renderMarkdown } from "./components";
+import { pixelRank } from "./RoamToki";
 
 /* ─── 1-bit pet sprites (cream phosphor on CRT) ──────────── */
 
@@ -131,8 +132,8 @@ const PV_OCTO = [
 // V4-19: Studio 애니 모델 — 상태별 {fps, frames}. 내장 12종은 정적 rows만
 // 갖고(states 없음), Studio에서 온 유저 펫만 states를 실어 프레임 플레이어를 탄다.
 type PetAnim = { w?: number; h?: number; fps?: number; frames: string[][] };
-type UserPetData = { id: string; name: string; states: Record<string, PetAnim> };
-type PetVariant = {
+export type UserPetData = { id: string; name: string; states: Record<string, PetAnim> };
+export type PetVariant = {
   id: string; name: string; rows: string[]; unlockLv: number;
   /** 상태 표정 — 있으면 배고픔·집중에서 이 스프라이트로 바뀐다. */
   hungryRows?: string[]; focusRows?: string[];
@@ -141,7 +142,7 @@ type PetVariant = {
 // V4-3: milestone unlock by LEVEL (lv is the honest visualization of
 // cumulative token usage, already available). Locked variants show as ???
 // in the appearance carousel until the level is reached.
-const PET_VARIANTS: PetVariant[] = [
+export const PET_VARIANTS: PetVariant[] = [
   // 첫 자리 = 기본 펫(설정이 없을 때의 폴백). 앱 이름이 Toki라 토끼가 먼저다.
   { id: "bunny", name: "깡총이", rows: PV_BUNNY, unlockLv: 1, hungryRows: PV_BUNNY_HUNGRY, focusRows: PV_BUNNY_FOCUS },
   { id: "dong", name: "동글이", rows: P_IDLE, unlockLv: 1, hungryRows: P_HUNGRY, focusRows: P_FOCUS },
@@ -170,13 +171,15 @@ const P_LOCKED = [
   "..#........#....", "...########.....", "......##........", "......##........",
 ];
 
-export function PetSprite({ rows, scale = 6 }: { rows: string[]; scale?: number }) {
+/** `reveal` 0~1: 그 비율까지의 픽셀만 그린다 — 자유 이동 전이(M10)에서 한 픽셀씩 사라지고 나타난다. */
+export function PetSprite({ rows, scale = 6, reveal = 1 }: { rows: string[]; scale?: number; reveal?: number }) {
   const h = rows.length;
   const w = Math.max(...rows.map((r) => r.length));
   const cells: string[] = [];
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < (rows[y] || "").length; x++) {
       const ch = rows[y][x];
+      if (reveal < 1 && pixelRank(x, y) > reveal) continue;
       // '@' = eye pixel — bright like '#', but also cursor-tracked (detectEyes).
       const fill = ch === "#" || ch === "@" ? "var(--phos)" : ch === "o" ? "var(--phos-dim)" : null;
       if (fill) cells.push(`<rect x="${x}" y="${y}" width="1" height="1" fill="${fill}"/>`);
@@ -193,7 +196,7 @@ export function PetSprite({ rows, scale = 6 }: { rows: string[]; scale?: number 
 // Verified in node across all sprites (only "문어"/octo has no clean pair).
 // Memoized per sprite-rows reference (called every render).
 const eyeCache = new Map<string[], [number, number][]>();
-function detectEyes(rows: string[]): [number, number][] {
+export function detectEyes(rows: string[]): [number, number][] {
   const cached = eyeCache.get(rows);
   if (cached) return cached;
   // Authored eyes win: any '@' marks an eye pixel. You can't reliably guess
@@ -960,6 +963,7 @@ const SETTINGS_TOP: SettingsRow[] = [
 const SETTINGS_GROUPS: Record<string, { title: string; rows: SettingsRow[] }> = {
   display: { title: "표시", rows: [
     { id: "onTop", label: "최상위 고정" },
+    { id: "freeRoam", label: "화면 밖으로 나가기" },
     { id: "casing", label: "케이스 색상" },
     { id: "invert", label: "화면 반전" },
   ] },
@@ -1052,10 +1056,18 @@ export function TamagotchiShell({
   hasCoaching,
   reportClickRects = true,
   initialMode = "home",
+  away = false,
+  petReveal = 1,
+  onReturn,
 }: {
   lv: number;
   hungry: boolean;
   hasCoaching: boolean;
+  /** M10: 토키가 밖에 나가 있다 — 홈 화면이 '외출 중'이 된다. */
+  away?: boolean;
+  /** M10: 셸 안 토키의 픽셀 노출 비율(전이용). */
+  petReveal?: number;
+  onReturn?: () => void;
   // When false, the desk owns multi-rect click-through reporting and the
   // shell skips its own single-rect report (they'd otherwise fight).
   reportClickRects?: boolean;
@@ -1216,6 +1228,11 @@ export function TamagotchiShell({
   // native px, applied by withGaze — the body doesn't move). The cursor comes
   // from Rust's "cursor-pos" event (window-relative CSS/logical px) — NOT webview
   // pointermove, which never fires over the transparent/click-through desk.
+  // M10: 밖의 토키 말풍선('메뉴'·'집중')이 셸 화면을 연다 — DOM 이벤트 한 줄.
+  useEffect(() => {
+    const h = (e: Event) => { const m = (e as CustomEvent<Mode>).detail; if (m) { setMode(m); setCursor(0); } };
+    window.addEventListener("toki-shell-mode", h); return () => window.removeEventListener("toki-shell-mode", h);
+  }, []);
   const [gaze, setGaze] = useState({ dx: 0, dy: 0 });
   const petBoxRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -1476,6 +1493,7 @@ export function TamagotchiShell({
         : { kind: "text", text: "미감지" };
       case "casing": return { kind: "cycle", text: (settings?.case_color ?? "beige").toUpperCase() };
       case "invert": return { kind: "pill", on: !!settings?.invert_screen };
+      case "freeRoam": return { kind: "pill", on: !!settings?.free_roam };
       case "onTop": return { kind: "pill", on: settings?.always_on_top ?? true };
       case "coachBackend": return { kind: "cycle", text: backendLabel(settings?.coach_backend) };
       case "memoryPaste": return { kind: "text", text: memoryPasteBytes > 0 ? `${Math.max(1, Math.round(memoryPasteBytes / 1024))}KB` : "비어 있음" };
@@ -1503,6 +1521,8 @@ export function TamagotchiShell({
       runInstaller(hook?.statusline_installed ? "statusline_uninstall" : "statusline_install");
     } else if (id === "codexHooks") {
       if (hook?.codex_available) runInstaller(hook.codex_installed ? "codex_hooks_uninstall" : "codex_hooks_install");
+    } else if (id === "freeRoam") {
+      patchSettings({ free_roam: !settings?.free_roam });
     } else if (id === "casing") {
       const keys = Object.keys(CASES);
       const i = keys.indexOf(settings?.case_color ?? "beige");
@@ -1688,7 +1708,26 @@ export function TamagotchiShell({
 
   /* ── mode renders ── */
   let screen: React.ReactNode;
-  if (mode === "home") {
+  if (mode === "home" && away) {
+    // M10 외출 중 — 토키는 밖에 있다. 메뉴·집중은 그대로 되고, '돌아오기'가 귀가.
+    screen = (
+      <Screen
+        status={<><span>Lv.{lv}</span><span style={{ display: "flex", alignItems: "center", gap: 8 }}><Battery pct={usagePct} source={usageSource} agents={usageAgents} /><span className="pxmono9">{hhmm}</span></span></>}
+        buttons={[
+          { label: "메뉴", onClick: () => { setMode("menu"); setCursor(0); } },
+          { label: "돌아오기", primary: true, onClick: () => onReturn?.() },
+          { label: "집중", onClick: () => setMode("pomo") },
+        ]}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div ref={petBoxRef} style={{ display: "flex" }}><PetSprite rows={petRows} scale={3} reveal={petReveal} /></div>
+        </div>
+        <div style={{ textAlign: "center", fontFamily: "var(--pixel-9)", fontSize: 10, color: "var(--phos-dim)" }}>
+          {petReveal > 0 ? "…" : "외출 중 · 토키를 눌러 보세요"}
+        </div>
+      </Screen>
+    );
+  } else if (mode === "home") {
     screen = (
       <Screen
         status={<><span>Lv.{lv}</span><span style={{ display: "flex", alignItems: "center", gap: 8 }}><Battery pct={usagePct} source={usageSource} agents={usageAgents} /><span className="pxmono9">{hhmm}</span></span></>}
@@ -1700,7 +1739,7 @@ export function TamagotchiShell({
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div ref={petBoxRef} style={{ display: "flex" }}>
-            <PetSprite rows={petRows} scale={3} />
+            <PetSprite rows={petRows} scale={3} reveal={petReveal} />
           </div>
         </div>
         <div style={{ textAlign: "center", fontFamily: "var(--pixel-9)", fontSize: 10, color: "var(--phos-dim)" }}>

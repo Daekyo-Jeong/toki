@@ -19,7 +19,9 @@ import { emit, listen } from "@tauri-apps/api/event";
 
 /** 단축키 표기 — mac은 ⌘, 그 외(Windows)는 Ctrl. 처리 자체는 metaKey||ctrlKey로 둘 다 받는다. */
 const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
-import { CassetteShell, TamagotchiShell } from "./TamagotchiShell";
+import { CassetteShell, TamagotchiShell, PET_VARIANTS, detectEyes, type UserPetData } from "./TamagotchiShell";
+import { RoamToki, type RoamPhase } from "./RoamToki";
+import type { AppSettings } from "./Settings";
 
 // Borderless transparent windows don't reliably become the key window on
 // click (macOS), and without key status the webview gets mouse events but
@@ -460,6 +462,43 @@ export function MemoDesk({
 }) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const shellWrapRef = useRef<HTMLDivElement | null>(null);
+
+  /* ── M10 자유 이동 ──
+     설정은 Rust 가 `settings-changed` 로 밀어준다(셸 설정 화면에서 토글). phase:
+     home → leaving(셸 토키 소멸) → out(RoamToki in→roam) → returning(RoamToki out) → home. */
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [userPets, setUserPets] = useState<UserPetData[]>([]);
+  useEffect(() => {
+    invoke<AppSettings>("get_settings").then(setSettings).catch(() => {});
+    invoke<UserPetData[]>("user_pets").then(setUserPets).catch(() => {});
+    const un = listen<AppSettings>("settings-changed", (e) => setSettings(e.payload));
+    return () => { un.then((f) => f()).catch(() => {}); };
+  }, []);
+  const [roamPhase, setRoamPhase] = useState<"home" | "leaving" | "out" | "returning">("home");
+  const [roamSub, setRoamSub] = useState<RoamPhase>("in");
+  const [shellReveal, setShellReveal] = useState(1);
+  const roamRows = useMemo(() => {
+    const u = userPets.find((p) => p.id === settings?.active_character)?.states?.idle?.frames?.[0];
+    return u ?? (PET_VARIANTS.find((v) => v.id === settings?.active_character) ?? PET_VARIANTS[0]).rows;
+  }, [settings?.active_character, userPets]);
+  const roamEyes = useMemo(() => detectEyes(roamRows), [roamRows]);
+  // 셸 토키를 한 픽셀씩 지우고(0.6s) 밖으로 / 밖에서 돌아오면 0.45s 뒤 한 픽셀씩 그린다
+  const tweenReveal = useCallback((to: number, dur: number, done?: () => void) => {
+    const from = to === 1 ? 0 : 1, t0 = performance.now();
+    const f = () => { const k = Math.min(1, (performance.now() - t0) / 1000 / dur); setShellReveal(from + (to - from) * k); if (k < 1) requestAnimationFrame(f); else done?.(); };
+    requestAnimationFrame(f);
+  }, []);
+  const roamWant = !!settings?.free_roam;
+  useEffect(() => {
+    if (roamWant && roamPhase === "home") { setRoamPhase("leaving"); tweenReveal(0, 0.6, () => { setRoamSub("in"); setRoamPhase("out"); }); }
+    if (!roamWant && roamPhase === "out") { setRoamPhase("returning"); setRoamSub("out"); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roamWant, roamPhase]);
+  const roamOutDone = useCallback(() => { setRoamPhase("home"); setShellReveal(0); window.setTimeout(() => tweenReveal(1, 0.6), 450); }, [tweenReveal]);
+  const roamHome = useCallback(() => { invoke("set_settings", { settings: { ...(settings as AppSettings), free_roam: false } }).catch(() => {}); }, [settings]);
+  const shellRectFn = useCallback(() => shellWrapRef.current?.getBoundingClientRect() ?? null, []);
+  const isAway = roamPhase === "out" || roamPhase === "returning";
+  useEffect(() => { if (roamPhase === "out" && roamSub === "in") { const id = window.setTimeout(() => setRoamSub("roam"), 1200); return () => window.clearTimeout(id); } }, [roamPhase, roamSub]);
   const zTop = useRef(20);
   const draggingRef = useRef(false);
   /* M7: 이 창이 맡은 모니터와, 지금 붙어 있는 모니터 목록.
@@ -960,23 +999,35 @@ export function MemoDesk({
           M7: 셸은 **하나뿐**이라 소유 모니터의 창에서만 그린다. */}
       {hasShell && (
       <div className="shell-wrap"
-        onPointerDown={startShellDrag}
-        style={shellPos && !shellOrphan
+        onPointerDown={isAway ? undefined : startShellDrag}
+        style={isAway
+          // M10 외출 중: 디자인 그대로 ½ 로 우상단. 누르면 귀가(셸 안 '돌아오기'도 같다).
+          ? { position: "absolute", right: 18, top: 18, transform: "scale(.5)", transformOrigin: "top right",
+              cursor: "pointer", opacity: shellGone ? 0 : 1, transition: "transform .5s cubic-bezier(.2,.9,.25,1)" }
+          : shellPos && !shellOrphan
           ? { position: "absolute", left: Math.round(shellPos.fx * vp.w), top: Math.round(shellPos.fy * vp.h),
               cursor: "grab", opacity: shellGone ? 0 : 1 }
           : { position: "absolute", left: "50%", top: "50%",
               transform: "translate(-50%,-50%)", cursor: "grab", opacity: shellGone ? 0 : 1 }}>
         {/* post-it stack — press to peel off a new memo (design: MemoPad) */}
-        <div className="desk-ctl pad" title="눌러서 새 메모 붙이기" onClick={addMemo}
+        {!isAway && <div className="desk-ctl pad" title="눌러서 새 메모 붙이기" onClick={addMemo}
           style={{ position: "absolute", top: -18, right: 34, width: 72, height: 20, zIndex: 3, cursor: "pointer" }}>
           <div style={{ position: "absolute", inset: 0,
             background: "repeating-linear-gradient(0deg, rgba(60,80,55,0.16) 0 1px, transparent 1px 3px), linear-gradient(180deg, #dcead2 0%, #cfe0c5 40%, #bcd0b0 100%)",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,.55), inset 0 -1px 0 rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.14)" }} />
-        </div>
+        </div>}
         <div ref={shellWrapRef}>
-          <TamagotchiShell lv={lv} hungry={hungry} hasCoaching={hasCoaching} reportClickRects={false} />
+          <TamagotchiShell lv={lv} hungry={hungry} hasCoaching={hasCoaching} reportClickRects={false}
+            away={isAway} petReveal={shellReveal} onReturn={roamHome} />
         </div>
       </div>
+      )}
+      {hasShell && isAway && (
+        <RoamToki rows={roamRows} eyes={roamEyes} phase={roamSub} shellRect={shellRectFn}
+          onOutDone={roamOutDone} onHome={roamHome}
+          onFeed={() => invoke("open_agent").catch(() => {})}
+          onFocus={() => window.dispatchEvent(new CustomEvent("toki-shell-mode", { detail: "pomo" }))}
+          onMenu={() => window.dispatchEvent(new CustomEvent("toki-shell-mode", { detail: "menu" }))} />
       )}
 
       {/* 확장 중엔 창 원점이 옮겨졌으므로 렌더 좌표에 오프셋을 더한다. */}

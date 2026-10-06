@@ -66,6 +66,8 @@ dependencies = [
  "anyhow",
  "chrono",
  "cocoa",
+ "core-foundation",
+ "core-graphics 0.24.0",
  "dirs 5.0.1",
  "notify",
  "objc",
@@ -81,6 +83,7 @@ dependencies = [
  "tiny_http",
  "toki-core",
  "ureq",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

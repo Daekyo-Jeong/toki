@@ -272,6 +272,8 @@ fn set_settings(
         }
     }
     db.save_settings(&s).map_err(|e| e.to_string())?;
+    // 데스크(MemoDesk)가 설정 변화를 바로 받는다 — 자유 이동 토글(M10)이 첫 소비자.
+    let _ = app.emit("settings-changed", &s);
 
     // Reflect autostart change on the OS side immediately
     use tauri_plugin_autostart::ManagerExt;
@@ -1211,6 +1213,7 @@ pub fn run() {
             desk_debug_note,
             desk::desk_state_load,
             desk::desk_state_save,
+            desk::desk_windows,
             send_alert_notification
         ])
         .setup(|app| {

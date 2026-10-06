@@ -13,6 +13,8 @@ export type AppSettings = {
   coach_backend: string;
   coach_ollama_model: string;
   always_on_top: boolean;
+  /** M10: 토키가 셸 밖 데스크톱을 돌아다닌다 */
+  free_roam: boolean;
 };
 
 type DataSourceStatus = {

@@ -179,6 +179,8 @@ impl Db {
             // V4-10: window always-on-top, user-toggleable (tauri.conf.json's
             // hardcoded `alwaysOnTop: true` is just the pre-boot state now).
             "ALTER TABLE app_settings ADD COLUMN always_on_top INTEGER NOT NULL DEFAULT 1",
+            // M10: 토키가 셸 밖 데스크톱을 돌아다닌다(spec §9.6). 기본 꺼짐.
+            "ALTER TABLE app_settings ADD COLUMN free_roam INTEGER NOT NULL DEFAULT 0",
             // v5 M1: 이벤트가 어느 에이전트에서 왔나. 기존 행은 전부 Claude다
             // (v5 전엔 Claude만 읽었다). spec §5.1.
             "ALTER TABLE processed_events ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'",
@@ -533,6 +535,7 @@ pub struct AppSettings {
     pub coach_backend: String,      // "auto" | "claude" | "codex" | "ollama"
     pub coach_ollama_model: String, // ollama tag, e.g. "exaone3.5:7.8b"
     pub always_on_top: bool,        // desk floats above every window
+    pub free_roam: bool,            // M10: 셸 밖으로 나가기
 }
 
 impl Default for AppSettings {
@@ -548,6 +551,7 @@ impl Default for AppSettings {
             coach_backend: "auto".into(),
             coach_ollama_model: "exaone3.5:7.8b".into(),
             always_on_top: true,
+            free_roam: false,
         }
     }
 }
@@ -747,7 +751,7 @@ impl Db {
         let row = conn.query_row(
             "SELECT notifications_level, autostart_enabled, track_since_install,
                     install_baseline_cache_read, active_character, case_color, invert_screen,
-                    coach_backend, coach_ollama_model, always_on_top
+                    coach_backend, coach_ollama_model, always_on_top, free_roam
              FROM app_settings WHERE id = 1",
             [],
             |r| {
@@ -762,6 +766,7 @@ impl Db {
                     coach_backend: r.get(7)?,
                     coach_ollama_model: r.get(8)?,
                     always_on_top: r.get::<_, i64>(9)? != 0,
+                    free_roam: r.get::<_, i64>(10)? != 0,
                 })
             },
         );
@@ -781,7 +786,8 @@ impl Db {
                invert_screen = ?7,
                coach_backend = ?8,
                coach_ollama_model = ?9,
-               always_on_top = ?10
+               always_on_top = ?10,
+               free_roam = ?11
              WHERE id = 1",
             params![
                 s.notifications_level,
@@ -794,6 +800,7 @@ impl Db {
                 s.coach_backend,
                 s.coach_ollama_model,
                 s.always_on_top as i64,
+                s.free_roam as i64,
             ],
         )?;
         Ok(())
