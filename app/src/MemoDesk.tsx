@@ -199,7 +199,7 @@ function GhostCard({ g }: { g: NonNullable<Ghost> }) {
     // 토키 자리 표시 — 포탈 크기의 점선 상자 하나. 몸까지 그리면 "이미 왔다"로 읽힌다.
     return (
       <div style={{ position: "absolute", left: g.x - 52, top: g.y - 48, width: 104, height: 96, zIndex: 999, pointerEvents: "none",
-        border: "2px dashed var(--phos)", borderRadius: 14, background: "rgba(12,12,18,.35)", opacity: 0.8 }} />
+        border: "2px dashed var(--phos)", borderRadius: "50%", background: "rgba(12,12,18,.35)", opacity: 0.8 }} />
     );
   }
   if (g.kind === "shell") {
