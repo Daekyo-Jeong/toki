@@ -62,7 +62,7 @@ function drawSprite(cv: HTMLCanvasElement, rows: string[], eyes: [number, number
 
 /** 걸어서 넘어오면 side+y, 드래그로 떨어뜨리면 x+y(그 창 CSS px). */
 export type RoamEntry = { side?: "left" | "right"; x?: number; y: number };
-export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCross, onDragState, onDropOutside, onOutDone, onHome, onFeed, onFocus, onMenu }: {
+export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCross, onDragState, onDropOutside, onDragOutside, onOutDone, onHome, onFeed, onFocus, onMenu }: {
   rows: string[]; eyes: [number, number][];
   phase: RoamPhase;
   /** 옆 모니터에서 넘어온 경우의 진입 변(side)과 y(이 창 CSS px). */
@@ -74,6 +74,8 @@ export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCros
   onDragState: (dragging: boolean) => void;
   /** 창 밖(옆 모니터)에 떨어뜨렸다 — 데스크가 어느 모니터인지 알아내 넘긴다. */
   onDropOutside: (clientX: number, clientY: number) => void;
+  /** 드래그 중 창 밖에 있을 때(옆 모니터 미리보기용). 안이면 null. */
+  onDragOutside: (outside: boolean) => void;
   /** 셸의 현재 사각형(데스크 창 CSS px). 발판·귀가 판정에 쓴다. */
   shellRect: () => DOMRect | null;
   onOutDone: () => void;
@@ -284,12 +286,12 @@ export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCros
   const onDown = (e: React.PointerEvent) => { down.current = { x: e.clientX, y: e.clientY }; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); };
   const onMove = (e: React.PointerEvent) => {
     if (down.current && !T.drag && Math.hypot(e.clientX - down.current.x, e.clientY - down.current.y) > 6) { T.drag = true; T.surface = "air"; T.mode = "idle"; setBubble(false); onDragState(true); }
-    if (T.drag) { T.x = e.clientX; T.y = e.clientY + S / 2; }
+    if (T.drag) { T.x = e.clientX; T.y = e.clientY + S / 2; onDragOutside(e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight); }
     cursor.current = { x: e.clientX, y: e.clientY };
   };
   const onUp = (e: React.PointerEvent) => {
     if (T.drag) {
-      T.drag = false; onDragState(false);
+      T.drag = false; onDragState(false); onDragOutside(false);
       const out = e.clientX < -8 || e.clientY < -8 || e.clientX > window.innerWidth + 8 || e.clientY > window.innerHeight + 8;
       if (out) { onDropOutside(e.clientX, e.clientY); return; }
       const r = shellRect();

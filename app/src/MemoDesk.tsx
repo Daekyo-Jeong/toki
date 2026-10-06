@@ -173,6 +173,7 @@ type GhostMsg = { from: string; dragId: string; ghost: Ghost; done: boolean };
 type Ghost =
   | { kind: "memo"; key: string; x: number; y: number; w: number; h: number; color: NoteColor; title: string; rot: number }
   | { kind: "shell"; key: string; x: number; y: number; w: number; h: number; casing: string }
+  | { kind: "toki"; key: string; x: number; y: number }
   | null;
 let dragSeq = 0;
 function newDragId(): string {
@@ -194,6 +195,13 @@ function endGhost(dragId: string) {
 const endedDrags = new Set<string>();
 
 function GhostCard({ g }: { g: NonNullable<Ghost> }) {
+  if (g.kind === "toki") {
+    // 토키 자리 표시 — 포탈 크기의 점선 상자 하나. 몸까지 그리면 "이미 왔다"로 읽힌다.
+    return (
+      <div style={{ position: "absolute", left: g.x - 52, top: g.y - 48, width: 104, height: 96, zIndex: 999, pointerEvents: "none",
+        border: "2px dashed var(--phos)", borderRadius: 14, background: "rgba(12,12,18,.35)", opacity: 0.8 }} />
+    );
+  }
   if (g.kind === "shell") {
     /* 실루엣을 손으로 그리지 않는다 — **실제 CassetteShell을 그대로 렌더**한다.
        손으로 그리면 마진 하나만 어긋나도 "다른 물건"으로 보이고, 셸 디자인이
@@ -645,8 +653,20 @@ export function MemoDesk({
     setRoamHere(false);
     emit("toki-roam-cross", { to: t.key, side: side === "left" ? "right" : "left", y: t.y }).catch(() => {});
   }, [neighbor]);
+  /** 토키 드래그가 창 밖에 있는 동안 옆 모니터에 자리 표시를 띄운다(메모·셸과 같은 유령). */
+  const roamGhost = useRef<{ id: string; last: number } | null>(null);
+  const onRoamDragOutside = useCallback((outside: boolean) => {
+    if (!outside) { if (roamGhost.current) { endGhost(roamGhost.current.id); roamGhost.current = null; } return; }
+    if (!roamGhost.current) roamGhost.current = { id: newDragId(), last: 0 };
+    const g = roamGhost.current, now = performance.now(); if (now - g.last < 60) return; g.last = now;
+    invoke<{ key: string; x: number; y: number } | null>("desk_cursor_target").then((t) => {
+      if (!t || !roamGhost.current || t.key === monRef.current?.key) return;
+      emitGhost(roamGhost.current.id, { kind: "toki", key: t.key, x: Math.round(t.x), y: Math.round(t.y) });
+    }).catch(() => {});
+  }, []);
   /** 토키를 창 밖(옆 모니터)에 떨어뜨렸다 — 메모·셸 드래그와 같은 길(desk_cursor_target). */
   const onRoamDropOutside = useCallback(() => {
+    if (roamGhost.current) { endGhost(roamGhost.current.id); roamGhost.current = null; }
     invoke<{ key: string; x: number; y: number } | null>("desk_cursor_target").then((t) => {
       if (!t || t.key === monRef.current?.key) return;
       setRoamHere(false);
@@ -697,12 +717,14 @@ export function MemoDesk({
   const settingsRef = useRef(settings); settingsRef.current = settings;
   /** M10 롱프레스: 셸 어디든(화면 포함) 3초 동안 4px 안 움직이고 누르면 토키가 나간다.
       캡처 단계라 자식이 propagation 을 막아도 받는다. 버튼은 뺀다. */
+  const pressFired = useRef(false);
   const onShellPressCapture = (e: React.PointerEvent) => {
+    pressFired.current = false;
     if (isAwayRef.current) return;
     if ((e.target as HTMLElement).closest(".cf-soft, .pad, [data-dlg-btn]")) return;
     const x0 = e.clientX, y0 = e.clientY;
     const timer = window.setTimeout(() => {
-      cleanup();
+      cleanup(); pressFired.current = true;
       const st = settingsRef.current; if (st && !st.free_roam) invoke("set_settings", { settings: { ...st, free_roam: true } }).catch(() => {});
     }, 3000);
     const move = (ev: PointerEvent) => { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 4) cleanup(); };
@@ -992,6 +1014,8 @@ export function MemoDesk({
     };
     const up = (ev: PointerEvent) => {
       onDragState(false);
+      // 롱프레스로 방금 내보낸 제스처의 손떼기 — 귀가로 읽으면 바로 되돌아온다(대교 실기, 2026-10-06)
+      if (pressFired.current) { pressFired.current = false; window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); endGhost(dragId); setShellGone(false); return; }
       // 외출 중: 안 움직이고 떼면 귀가
       if (isAwayRef.current && !moved) { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); endGhost(dragId); roamHomeRef.current(); return; }
       window.removeEventListener("pointermove", move);
@@ -1095,7 +1119,7 @@ export function MemoDesk({
       )}
       {roamHere && (
         <RoamToki rows={roamRows} eyes={roamEyes} phase={roamSub} entry={roamEntry} shellRect={shellRectFn}
-          canCross={canCross} onCross={onCross} onDragState={onDragState} onDropOutside={onRoamDropOutside}
+          canCross={canCross} onCross={onCross} onDragState={onDragState} onDropOutside={onRoamDropOutside} onDragOutside={onRoamDragOutside}
           onOutDone={roamOutDone} onHome={roamHome}
           onFeed={() => invoke("open_agent").catch(() => {})}
           onFocus={() => window.dispatchEvent(new CustomEvent("toki-shell-mode", { detail: "pomo" }))}
