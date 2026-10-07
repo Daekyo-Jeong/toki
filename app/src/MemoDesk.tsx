@@ -696,11 +696,17 @@ export function MemoDesk({
   }, []);
   const roamWant = !!settings?.free_roam;
   useEffect(() => {
-    if (roamWant && roamPhase === "home" && hasShell) { setRoamPhase("leaving"); tweenReveal(0, 0.6, () => { setRoamEntry(null); setRoamSub("in"); setRoamHere(true); setRoamPhase("out"); }); }
+    /* 나가는 건 **셸 창 하나만**. 기동 직후엔 데스크 상태(셸이 어느 모니터에 있나)가
+       오기 전이라 주 모니터 창이 잠깐 자기를 셸 창으로 믿는다 — free_roam 이 켜진 채
+       재시작하면 그 창도 내보내고, 진짜 셸 창도 내보내 토키가 모니터마다 하나씩
+       복제됐다(대교 실기, 2026-10-07). deskReady·monKey 까지 기다린다. */
+    if (roamWant && roamPhase === "home" && hasShell && deskReady && monKey) { setRoamPhase("leaving"); tweenReveal(0, 0.6, () => { setRoamEntry(null); setRoamSub("in"); setRoamHere(true); setRoamPhase("out"); }); }
     if (!roamWant && roamPhase === "out") { setRoamPhase("returning"); if (roamHere) setRoamSub("out"); }
     if (!roamWant && !hasShell && roamHere) setRoamSub("out"); // 셸 없는 창에 토키가 있을 때
+    // 셸이 이 창을 떠났는데(드래그로 옮김·판정 번복) 넘어온 토키가 아니면 — 주인이 아니다. 조용히 거둔다.
+    if (roamHere && !roamEntry && !hasShell && roamPhase !== "home") { setRoamHere(false); setRoamPhase("home"); setShellReveal(1); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roamWant, roamPhase, roamHere, hasShell]);
+  }, [roamWant, roamPhase, roamHere, hasShell, deskReady, monKey]);
   const roamOutDone = useCallback(() => {
     setRoamHere(false); setRoamEntry(null);
     if (shellWrapRef.current) { setRoamPhase("home"); setShellReveal(0); window.setTimeout(() => tweenReveal(1, 0.6), 450); }
