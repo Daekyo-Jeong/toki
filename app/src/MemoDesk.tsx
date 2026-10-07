@@ -20,7 +20,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 /** 단축키 표기 — mac은 ⌘, 그 외(Windows)는 Ctrl. 처리 자체는 metaKey||ctrlKey로 둘 다 받는다. */
 const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 import { CassetteShell, TamagotchiShell, PET_VARIANTS, detectEyes, type UserPetData } from "./TamagotchiShell";
-import { RoamToki, type RoamPhase, type RoamEntry } from "./RoamToki";
+import { RoamToki, type RoamPhase, type RoamEntry, type RoamGrab } from "./RoamToki";
 import type { AppSettings } from "./Settings";
 
 // Borderless transparent windows don't reliably become the key window on
@@ -636,6 +636,7 @@ export function MemoDesk({
      (메모 넘기기와 같은 길). 셸은 원래 창에 남는다. */
   const [roamHere, setRoamHere] = useState(false);
   const [roamEntry, setRoamEntry] = useState<RoamEntry | null>(null);
+  const [roamGrab, setRoamGrab] = useState<RoamGrab | null>(null);
   const [awayHover, setAwayHover] = useState(false);
   const monRef = useRef(mon); monRef.current = mon;
   const monListRef = useRef(monList); monListRef.current = monList;
@@ -708,7 +709,7 @@ export function MemoDesk({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roamWant, roamPhase, roamHere, hasShell, deskReady, monKey]);
   const roamOutDone = useCallback(() => {
-    setRoamHere(false); setRoamEntry(null);
+    setRoamHere(false); setRoamEntry(null); setRoamGrab(null);
     if (shellWrapRef.current) { setRoamPhase("home"); setShellReveal(0); window.setTimeout(() => tweenReveal(1, 0.6), 450); }
     else emit("toki-roam-home", {}).catch(() => {});   // 셸은 다른 창에 — 거기서 다시 그린다
   }, [tweenReveal]);
@@ -729,11 +730,17 @@ export function MemoDesk({
     if (isAwayRef.current) return;
     if ((e.target as HTMLElement).closest(".cf-soft, .pad, [data-dlg-btn]")) return;
     const x0 = e.clientX, y0 = e.clientY;
+    let last = { x: x0, y: y0 };
     const timer = window.setTimeout(() => {
       cleanup(); pressFired.current = true;
+      // 집어낸 채로 나온다 — 토키가 커서 자리에 나타나 손에 들린다. 놓을 때까지 따라간다.
+      setRoamGrab({ x: last.x, y: last.y, released: false });
+      const gm = (ev: PointerEvent) => { last = { x: ev.clientX, y: ev.clientY }; if (ev.buttons === 0) gu(ev); };
+      const gu = (ev: PointerEvent) => { window.removeEventListener("pointermove", gm); window.removeEventListener("pointerup", gu); window.removeEventListener("pointercancel", gu); setRoamGrab({ x: ev.clientX, y: ev.clientY, released: true }); };
+      window.addEventListener("pointermove", gm); window.addEventListener("pointerup", gu); window.addEventListener("pointercancel", gu);
       const st = settingsRef.current; if (st && !st.free_roam) invoke("set_settings", { settings: { ...st, free_roam: true } }).catch(() => {});
     }, 3000);
-    const move = (ev: PointerEvent) => { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 4) cleanup(); };
+    const move = (ev: PointerEvent) => { last = { x: ev.clientX, y: ev.clientY }; if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 4) cleanup(); };
     const cleanup = () => { window.clearTimeout(timer); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", cleanup); window.removeEventListener("pointercancel", cleanup); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", cleanup); window.addEventListener("pointercancel", cleanup);
   };
@@ -1124,7 +1131,8 @@ export function MemoDesk({
       </div>
       )}
       {roamHere && (
-        <RoamToki rows={roamRows} eyes={roamEyes} phase={roamSub} entry={roamEntry} shellRect={shellRectFn}
+        <RoamToki rows={roamRows} eyes={roamEyes} phase={roamSub} entry={roamEntry} grab={roamGrab} shellRect={shellRectFn}
+          onOverShell={setAwayHover}
           canCross={canCross} onCross={onCross} onDragState={onDragState} onDropOutside={onRoamDropOutside} onDragOutside={onRoamDragOutside}
           onOutDone={roamOutDone} onHome={roamHome}
           onFeed={() => invoke("open_agent").catch(() => {})}

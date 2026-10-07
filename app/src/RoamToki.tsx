@@ -62,11 +62,16 @@ function drawSprite(cv: HTMLCanvasElement, rows: string[], eyes: [number, number
 
 /** 걸어서 넘어오면 side+y, 드래그로 떨어뜨리면 x+y(그 창 CSS px). */
 export type RoamEntry = { side?: "left" | "right"; x?: number; y: number };
-export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCross, onDragState, onDropOutside, onDragOutside, onOutDone, onHome, onFeed, onFocus, onMenu }: {
+export type RoamGrab = { x: number; y: number; released: boolean };
+export function RoamToki({ rows, eyes, phase, entry, grab, shellRect, canCross, onCross, onDragState, onDropOutside, onDragOutside, onOverShell, onOutDone, onHome, onFeed, onFocus, onMenu }: {
   rows: string[]; eyes: [number, number][];
   phase: RoamPhase;
   /** 옆 모니터에서 넘어온 경우의 진입 변(side)과 y(이 창 CSS px). */
   entry?: RoamEntry | null;
+  /** 셸 롱프레스로 **집어낸** 경우 — 커서 자리에 나타나 손에 들린 채 시작한다. released 가 true 로 바뀌면 놓는다. */
+  grab?: RoamGrab | null;
+  /** 드래그 중 커서가 셸 위에 있나 — 셸이 커져서 받을 준비를 한다. */
+  onOverShell: (over: boolean) => void;
   /** 이 변에 옆 모니터가 있나 — 있으면 벽을 타지 않고 넘어간다. */
   canCross: (side: "left" | "right", y: number) => boolean;
   onCross: (side: "left" | "right", y: number) => void;
@@ -250,12 +255,31 @@ export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCros
       return;
     }
     if (phase === "in") {
+      T.reveal = 0; T.padReveal = 0; T.mode = "idle"; T.until = now() + 1.6;
+      if (grab && !grab.released) {
+        // 셸에서 집어냈다 — 커서 자리에 나타나고 손에 들려 있다(대교, 2026-10-07)
+        T.x = grab.x; T.y = grab.y + S / 2; T.surface = "air"; T.drag = true; onDragState(true);
+        return;
+      }
       // 셸 아래 바닥에서 시작 — 바탕 → 토키 순으로 한 픽셀씩
       const sr = shellRect(); T.x = Math.min(W() - 80, Math.max(80, sr ? sr.left + sr.width / 2 : W() / 2)); T.y = H();
-      T.surface = "floor"; T.mode = "idle"; T.until = now() + 1.6; T.reveal = 0; T.padReveal = 0; T.drag = false;
+      T.surface = "floor"; T.drag = false;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
+
+  /* 집어낸 상태의 전역 포인터 — 몸에 pointerdown 이 없었으니 window 에서 듣는다. */
+  const grabActive = useRef(false);
+  useEffect(() => {
+    if (!grab) return;
+    if (grab.released) { if (grabActive.current) { grabActive.current = false; finishDrag(grab.x, grab.y); } return; }
+    grabActive.current = true;
+    const mv = (e: PointerEvent) => { if (!grabActive.current) return; if (e.buttons === 0) { grabActive.current = false; finishDrag(e.clientX, e.clientY); return; } moveDrag(e.clientX, e.clientY); };
+    const up = (e: PointerEvent) => { if (!grabActive.current) return; grabActive.current = false; finishDrag(e.clientX, e.clientY); };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+    return () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grab]);
 
   /* ── 루프 ── */
   useEffect(() => {
@@ -283,21 +307,32 @@ export function RoamToki({ rows, eyes, phase, entry, shellRect, canCross, onCros
 
   /* ── 클릭·드래그 ── */
   const down = useRef<{ x: number; y: number } | null>(null);
-  const onDown = (e: React.PointerEvent) => { down.current = { x: e.clientX, y: e.clientY }; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); };
+  const overShell = useRef(false);
+  const inShell = (x: number, y: number) => { const r = shellRect(); return !!r && x > r.left && x < r.right && y > r.top && y < r.bottom; };
+  const moveDrag = (x: number, y: number) => {
+    T.x = x; T.y = y + S / 2;
+    onDragOutside(x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight);
+    const o = inShell(x, y); if (o !== overShell.current) { overShell.current = o; onOverShell(o); } // 셸 위면 셸이 커져 받는다
+  };
+  const finishDrag = (x: number, y: number) => {
+    T.drag = false; down.current = null; onDragState(false); onDragOutside(false);
+    if (overShell.current) { overShell.current = false; onOverShell(false); }
+    const out = x < -8 || y < -8 || x > window.innerWidth + 8 || y > window.innerHeight + 8;
+    if (out) { onDropOutside(x, y); return; }
+    if (inShell(x, y)) { onHome(); return; } // 셸 위에 놓으면 그 자리에서 귀가
+    T.surface = "air"; T.vx = 0; T.vy = 0;
+  };
+  const onDown = (e: React.PointerEvent) => { if (phaseRef.current !== "roam") return; down.current = { x: e.clientX, y: e.clientY }; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); };
   const onMove = (e: React.PointerEvent) => {
     if (down.current && !T.drag && Math.hypot(e.clientX - down.current.x, e.clientY - down.current.y) > 6) { T.drag = true; T.surface = "air"; T.mode = "idle"; setBubble(false); onDragState(true); }
-    if (T.drag) { T.x = e.clientX; T.y = e.clientY + S / 2; onDragOutside(e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight); }
+    if (T.drag && !grabActive.current) moveDrag(e.clientX, e.clientY);
     cursor.current = { x: e.clientX, y: e.clientY };
   };
   const onUp = (e: React.PointerEvent) => {
-    if (T.drag) {
-      T.drag = false; onDragState(false); onDragOutside(false);
-      const out = e.clientX < -8 || e.clientY < -8 || e.clientX > window.innerWidth + 8 || e.clientY > window.innerHeight + 8;
-      if (out) { onDropOutside(e.clientX, e.clientY); return; }
-      const r = shellRect();
-      if (r && e.clientX > r.left && e.clientX < r.right && e.clientY > r.top && e.clientY < r.bottom) { onHome(); return; } // 셸 위에 놓으면 귀가
-      T.surface = "air"; T.vx = 0; T.vy = 0;
-    } else if (down.current && phaseRef.current === "roam") setBubble((b) => !b);
+    // 놓는 순간 그 자리 — 예전엔 귀가 분기가 down 을 안 지워 다음 pointermove 가 드래그를 되살려
+    // 소멸 연출 내내 커서를 따라다녔다(대교 실기, 2026-10-07)
+    if (T.drag) { if (!grabActive.current) finishDrag(e.clientX, e.clientY); return; }
+    if (down.current && phaseRef.current === "roam") setBubble((b) => !b);
     down.current = null;
   };
 
