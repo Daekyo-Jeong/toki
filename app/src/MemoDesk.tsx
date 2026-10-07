@@ -725,6 +725,7 @@ export function MemoDesk({
   /** M10 롱프레스: 셸 어디든(화면 포함) 3초 동안 4px 안 움직이고 누르면 토키가 나간다.
       캡처 단계라 자식이 propagation 을 막아도 받는다. 버튼은 뺀다. */
   const pressFired = useRef(false);
+  const shellDragCancel = useRef<(() => void) | null>(null);
   const onShellPressCapture = (e: React.PointerEvent) => {
     pressFired.current = false;
     if (isAwayRef.current) return;
@@ -733,6 +734,7 @@ export function MemoDesk({
     let last = { x: x0, y: y0 };
     const timer = window.setTimeout(() => {
       cleanup(); pressFired.current = true;
+      shellDragCancel.current?.();
       // 집어낸 채로 나온다 — 토키가 커서 자리에 나타나 손에 들린다. 놓을 때까지 따라간다.
       setRoamGrab({ x: last.x, y: last.y, released: false });
       const gm = (ev: PointerEvent) => { last = { x: ev.clientX, y: ev.clientY }; if (ev.buttons === 0) gu(ev); };
@@ -994,6 +996,8 @@ export function MemoDesk({
     const ox = e.clientX - rect.left;
     const oy = e.clientY - rect.top;
     let moved = false;
+    // 롱프레스가 발화하면 이 드래그를 **즉시** 끝낸다 — 안 끝내면 셸과 토키가 같이 끌려다닌다(대교 실기, 2026-10-07)
+    shellDragCancel.current = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); endGhost(dragId); setShellGone(false); onDragState(false); shellDragCancel.current = null; };
     const gw = Math.round(rect.width), gh = Math.round(rect.height);
     // 셸도 같은 규칙 — 창 밖으로 나가면 목적지 화면에 자리 표시가 따라다니고,
     // 놓으면 그 화면으로 넘어간다.
@@ -1026,6 +1030,7 @@ export function MemoDesk({
         .catch(() => {});
     };
     const up = (ev: PointerEvent) => {
+      shellDragCancel.current = null;
       onDragState(false);
       // 롱프레스로 방금 내보낸 제스처의 손떼기 — 귀가로 읽으면 바로 되돌아온다(대교 실기, 2026-10-06)
       if (pressFired.current) { pressFired.current = false; window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); endGhost(dragId); setShellGone(false); return; }
