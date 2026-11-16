@@ -14,6 +14,8 @@ mod planner;
 mod platform;
 mod retro;
 mod thrash_watch;
+#[cfg(target_os = "macos")]
+mod tray_click_macos;
 mod tray_sprite;
 mod skill_catalog;
 mod statusline_installer;
@@ -1270,7 +1272,7 @@ pub fn run() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-            TrayIconBuilder::with_id("main-tray")
+            let tray = TrayIconBuilder::with_id("main-tray")
                 // Dedicated menubar glyph (black-on-transparent) rendered as a
                 // macOS template so it inverts with light/dark menubar — the
                 // full-color app icon reads poorly at menubar size.
@@ -1295,10 +1297,23 @@ pub fn run() {
                         ..
                     } = event
                     {
+                        // macOS 27 은 메뉴가 아이콘에 붙어 있으면 왼쪽 클릭이 여기로 안 온다 — tray_click_macos 가 메뉴를 뗀다
+                        desk::debug_log("[tray] left click → toggle desk");
                         toggle_desk(tray.app_handle());
                     }
                 })
                 .build(app)?;
+
+            // macOS 27+ — 메뉴는 오른쪽 클릭에만 띄운다 (tray_click_macos 참고). 26 이하는 그대로.
+            #[cfg(target_os = "macos")]
+            let _ = tray.with_inner_tray_icon(|inner| {
+                if let Some(item) = inner.ns_status_item() {
+                    let ptr = objc2::rc::Retained::as_ptr(&item) as *mut objc2::runtime::AnyObject;
+                    tray_click_macos::install_menu_on_right_click_only(ptr);
+                }
+            });
+            #[cfg(not(target_os = "macos"))]
+            let _ = tray;
 
             if let Some(win) = app.get_webview_window("main") {
                 // V4-10: re-apply the persisted always-on-top choice (the

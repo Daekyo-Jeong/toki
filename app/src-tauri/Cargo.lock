@@ -64,6 +64,7 @@ name = "app"
 version = "1.0.2"
 dependencies = [
  "anyhow",
+ "block2",
  "chrono",
  "cocoa",
  "core-foundation",
@@ -71,6 +72,7 @@ dependencies = [
  "dirs 5.0.1",
  "notify",
  "objc",
+ "objc2",
  "rusqlite",
  "serde",
  "serde_json",
